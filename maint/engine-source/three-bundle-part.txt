@@ -1,0 +1,1 @@
+three.js r160 已打包在 engine.html 主模組前段（含 site-data 讀取那一行，約 3682 行），此處省略；重建時請用 npm three@0.160 引入。

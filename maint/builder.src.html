@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NCCU 3D導覽網站小幫手</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 28'%3E%3Cpath d='M5 13l5.5-5.5h11L27 13l-5.5 5.5h-11z' fill='%238fbf7a'/%3E%3Cpath d='M5 13l5.5 5.5v5L5 18z' fill='%23b98f5e'/%3E%3Cpath d='M10.5 18.5h11v5h-11z' fill='%23a47a4b'/%3E%3Cpath d='M21.5 18.5L27 13v5l-5.5 5.5z' fill='%238f6a3f'/%3E%3Cpath d='M16 5.2l3.6 1.9L16 9l-3.6-1.9z' fill='%23f0a98c'/%3E%3Cpath d='M12.4 7.1L16 9v4.2l-3.6-1.9z' fill='%23c8643b'/%3E%3Cpath d='M16 9l3.6-1.9v4.2L16 13.2z' fill='%23a94f2c'/%3E%3C/svg%3E">
+<style>
+:root{--ink:#25313b;--muted:#5d6b76;--faint:#8b97a1;--line:#dfe5e3;--bg:#f4f6f3;--card:#fff;--accent:#c8643b;--ok:#4d7d4a;--warn:#a8741a;--bad:#b4493a}
+*{box-sizing:border-box}html{overflow-wrap:anywhere}
+body{margin:0;font:400 15px/1.7 "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;color:var(--ink);background:var(--bg)}
+header{padding:16px 20px 6px}header h1{margin:0;font-size:21px;letter-spacing:.04em;display:flex;align-items:center;gap:9px}header h1 .logo{flex:none;filter:drop-shadow(0 2px 2px rgba(60,40,20,.25))}header p{margin:2px 0 0;color:var(--muted);font-size:13.5px}
+main{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:14px;padding:10px 20px 20px;height:calc(100vh - 78px);min-height:560px}
+.col{display:flex;flex-direction:column;gap:10px;min-height:0}
+textarea{flex:1;min-height:160px;width:100%;resize:none;border:1px solid var(--line);border-radius:12px;padding:12px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--card);color:var(--ink)}
+textarea:focus-visible,button:focus-visible{outline:3px solid #f0b48f;outline-offset:2px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;font-weight:700;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;background:#e6ebe8;color:var(--ink)}
+button.pri{background:var(--ink);color:#fff}button[disabled]{opacity:.4;cursor:not-allowed}
+#flow{margin:0;padding:8px 12px 8px 30px;background:var(--card);border:1px solid var(--line);border-radius:12px;font-size:13px;line-height:1.6;color:var(--muted)}#flow li+li{margin-top:2px}button.info{all:unset;cursor:pointer;width:26px;height:26px;display:inline-grid;place-items:center;border-radius:50%;color:var(--faint)}button.info:hover{color:var(--accent);background:#eef1ee}button.info:focus-visible{outline:3px solid #f0b48f;outline-offset:2px}
+.lnk{all:unset;cursor:pointer;color:var(--accent);font-weight:700;text-decoration:underline;text-underline-offset:3px}.lnk:focus-visible{outline:3px solid #f0b48f;outline-offset:2px;border-radius:4px}
+dialog{width:min(720px,94vw);max-height:88vh;border:0;border-radius:16px;padding:0;color:var(--ink);box-shadow:0 20px 60px rgba(20,30,40,.35)}dialog::backdrop{background:rgba(30,40,50,.45)}
+.dh{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line)}.dh h2{margin:0;font-size:17px}.dh button{padding:6px 12px}
+.db{padding:14px 18px 18px;overflow:auto;max-height:calc(88vh - 64px);font-size:14px}.db h3{margin:14px 0 2px;font-size:14.5px}.db p{margin:4px 0}.db ol{padding-left:20px;margin:6px 0}.db li{margin:6px 0}
+.db pre{background:#f4f6f3;border:1px solid var(--line);border-radius:10px;padding:10px;max-height:210px;overflow:auto;white-space:pre-wrap;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;margin:6px 0}
+.note{background:#fff7ea;border:1px solid #f0d9ae;border-radius:10px;padding:8px 12px;font-size:13px;margin:10px 0 0}
+#msg{max-height:34%;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:13.5px}
+#msg h3{margin:6px 0 2px;font-size:13px}#msg ul{margin:0 0 4px;padding-left:18px}
+.ok{color:var(--ok);font-weight:700}.todo h3{color:var(--bad)}.hint h3{color:var(--warn)}
+#pv{flex:1;min-height:0;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#dfe9e6;position:relative}
+#pv iframe{width:100%;height:100%;border:0;display:block}
+#empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--muted);padding:24px}
+@media(max-width:820px){main{grid-template-columns:1fr;height:auto}.col{min-height:auto}textarea{min-height:200px}#pv{height:70vh;flex:none}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header><h1><svg class="logo" viewBox="0 0 32 28" width="34" height="30" aria-hidden="true"><path d="M5 13l5.5-5.5h11L27 13l-5.5 5.5h-11z" fill="#8fbf7a"/><path d="M5 13l5.5 5.5v5L5 18z" fill="#b98f5e"/><path d="M10.5 18.5h11v5h-11z" fill="#a47a4b"/><path d="M21.5 18.5L27 13v5l-5.5 5.5z" fill="#8f6a3f"/><path d="M16 5.2l3.6 1.9L16 9l-3.6-1.9z" fill="#f0a98c"/><path d="M12.4 7.1L16 9v4.2l-3.6-1.9z" fill="#c8643b"/><path d="M16 9l3.6-1.9v4.2L16 13.2z" fill="#a94f2c"/></svg><span>NCCU 3D導覽網站小幫手</span><button type="button" id="about" class="info" aria-label="關於這個小工具" title="關於這個小工具"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="7.6" r="1.4" fill="currentColor"/><path d="M12 11v6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></h1><p>把 AI 整理好的六張表貼在左邊，右邊就會長出可以逛的 3D 導覽網站。資料只在你的瀏覽器裡處理，不會上傳。</p></header>
+<main>
+ <section class="col" aria-label="貼上內容">
+  <ol id="flow"><li><button type="button" id="how" class="lnk">請 AI 把原始資料整理成六張表（點這裡看怎麼做）</button></li><li>核對 AI 的說明，用口語請它修改，直到你說「好」</li><li>把完整的六張表貼在下面，右邊就會長出預覽</li></ol>
+  <textarea id="src" spellcheck="false" aria-label="六張表" placeholder="把六張表貼在這裡～&#10;（每張表前面有「## 1_全站設定」這類標題；&#10;可以是 AI 給的表格，也可以直接從 Excel 複製貼上）"></textarea>
+  <div class="row"><button id="load">載入範例看看</button><button id="file">從檔案載入</button><button id="dl" class="pri" disabled>下載我的導覽網站</button></div>
+  <div id="msg" aria-live="polite"></div>
+  <input type="file" id="fi" accept=".md,.txt,.tsv,.csv" hidden>
+ </section>
+ <section class="col" aria-label="預覽"><div id="pv"><div id="empty">預覽會出現在這裡～<br>先貼上六張表，或按「載入範例看看」。</div></div></section>
+</main>
+<dialog id="dlg" aria-labelledby="dt"><div class="dh"><h2 id="dt">怎麼請 AI 把原始資料整理成六張表？</h2><button type="button" id="dx" aria-label="關閉">關閉</button></div><div class="db">
+<ol>
+<li><b>打開任何一個你慣用的 AI</b>（Gemini、Copilot、ChatGPT、Claude 都可以）。</li>
+<li><b>複製下面的指令，貼給 AI</b>，再把你的原始資料貼上去，或附上檔案。<div class="row"><button type="button" id="cp" class="pri">複製指令</button><span id="cpok" aria-live="polite" class="ok"></span></div><pre id="pt" tabindex="0"></pre></li>
+<li><b>AI 會先用 200 字內說明</b>它的整理邏輯、假設的讀者，以及哪些格子是推論的。請你核對，用口語說要改哪裡（例如「第二個分類改成……」）。</li>
+<li><b>你說「好」之後</b>，請 AI「把完整的六張表放進同一個程式碼區塊」，按程式碼區塊右上角的複製鈕。</li>
+<li><b>貼到這個頁面左邊的格子</b>，右邊就會長出預覽，左邊也會用白話告訴你哪裡還要處理。</li>
+</ol>
+<p class="note"><b>小提醒：</b>原始資料送到哪個 AI，就依那個 AI 的規範處理，個人資料請先去除。數字與案例請再對照原文確認一次，AI 沒把握的格子會被它列在說明裡。</p>
+</div></dialog>
+<dialog id="dlg2" aria-labelledby="dt2"><div class="dh"><h2 id="dt2">關於這個小工具</h2><button type="button" id="dx2" aria-label="關閉">關閉</button></div><div class="db">
+<p>這個小工具由電算中心行政諮詢組 Ali 與 Claude Code 協作完成，協助大家「把文字轉譯成一座可以走進去的小世界」。</p>
+<h3>怎麼做的</h3>
+<p>場景以 Three.js 繪製低多邊形的 3D 微縮群島：每個主題是一座六角形小島，島上有建築、道路、走動的人與小動物，還有隨時間切換的日夜與海面。你整理好的六張表會被轉成一份資料，引擎讀了就畫出整座島，最後打包成單一 HTML 檔，單機瀏覽或自行上傳到伺服器皆可。</p>
+</div></dialog>
+<script type="application/json" id="sample">__SAMPLE__</script>
+<script>
+"use strict";
+const ENGINE=__ENGINE__;
+const SHEETS=["1_全站設定","2_類別表","3_步驟表","4_實體表","5_動態元素表","6_來源表"];
+const sc=n=>["數值","單位","標籤","年份","來源"].map(x=>"數據"+n+x);
+const HEAD={"1_全站設定":["標題","副標","開場標語","導言","記得的事1","記得的事2","記得的事3","收束結語","聯絡方式","隱喻世界","品牌色","範本"],
+"2_類別表":["代號","名稱","識別色","一句話定位","隱喻造型","地面","邊界"],
+"3_步驟表":["順序","類別代號","實體代號","宣告標題","宣告副句"].concat(sc(1),sc(2),sc(3),["案例類型","案例內容","說明文字","圖片檔名"]),
+"4_實體表":["代號","名稱","類別代號","一句話亮點"].concat(sc(1),sc(2),["簡介","沿革","怎麼使用／申請","資源1名稱","資源1連結","資源2名稱","資源2連結","資源3名稱","資源3連結","聯絡窗口","圖片檔名"]),
+"5_動態元素表":["名稱","象徵什麼","出現位置","地標文字"],"6_來源表":["來源代號","來源名稱","連結","年份","算法說明","提供人"]};
+const REQ={"1_全站設定":["標題","開場標語","導言","收束結語"],"2_類別表":["代號","名稱","識別色"],"3_步驟表":["順序","類別代號","實體代號","宣告標題","說明文字"],"4_實體表":["代號","名稱","類別代號","一句話亮點","簡介"],"5_動態元素表":["名稱","象徵什麼"],"6_來源表":["來源代號","來源名稱","年份"]};
+const LIM={"1_全站設定":{"標題":[0,15],"開場標語":[0,25],"導言":[60,100],"收束結語":[60,100]},"3_步驟表":{"宣告標題":[0,12],"宣告副句":[0,25],"案例內容":[40,60],"說明文字":[80,150]},"4_實體表":{"一句話亮點":[0,28],"簡介":[50,90],"沿革":[0,60]}};
+const $=s=>document.querySelector(s);
+const t=v=>String(v==null?"":v).trim();
+/* 把貼上的文字拆成六張表：先找「## 1_全站設定」之類的標題，每張表可以是 Markdown（|）或從 Excel 複製的 Tab 分隔 */
+function splitPipes(line){let s=line.trim();if(s[0]==="|")s=s.slice(1);if(s.slice(-1)==="|")s=s.slice(0,-1);const out=[];let cur="";for(let i=0;i<s.length;i++){const c=s[i];if(c==="\\"&&s[i+1]==="|"){cur+="|";i++}else if(c==="|"){out.push(cur.trim());cur=""}else cur+=c}out.push(cur.trim());return out}
+function parse(text){
+ const res={},seen=[];let cur=null;
+ const lines=String(text).replace(/\r/g,"").split("\n");
+ for(const raw of lines){
+  const h=raw.match(/^\s{0,3}#{1,4}\s*(.+?)\s*$/);
+  if(h){const n=h[1].replace(/[＿\s]+/g,"_");const hit=SHEETS.find(s=>n.indexOf(s.slice(2))>=0);if(hit){cur=hit;res[cur]=[];seen.push(cur)}else cur=null;continue}
+  if(!cur||!raw.trim())continue;
+  if(/^\s*\|?\s*:?-{2,}/.test(raw)&&!/[^\s|:\-]/.test(raw))continue;
+  if(raw.indexOf("\t")>=0)res[cur].push(raw.split("\t").map(t));
+  else if(raw.indexOf("|")>=0)res[cur].push(splitPipes(raw));
+ }
+ const X={};
+ for(const name of SHEETS){const rows=res[name]||[];if(!rows.length){X[name]=[];continue}
+  const heads=rows[0];X[name]=rows.slice(1).map(r=>{const d={};heads.forEach((k,i)=>{if(k)d[k]=t(r[i])});return d}).filter(d=>Object.values(d).some(Boolean))}
+ return {X,seen};
+}
+const levenshtein=(a,b)=>{const m=[];for(let i=0;i<=a.length;i++){m[i]=[i]}for(let j=0;j<=b.length;j++)m[0][j]=j;for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)m[i][j]=Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return m[a.length][b.length]};
+function check(X,seen){
+ const todo=[],warn=[],hint=[];
+ for(const s of SHEETS)if(seen.indexOf(s)<0)todo.push("找不到「"+s+"」這張表～請確認有一行像「## "+s+"」的標題。");
+ for(const name of SHEETS){
+  const rows=X[name]||[];
+  if(rows.length){const known=HEAD[name];Object.keys(rows[0]).forEach(k=>{if(known.indexOf(k)<0){const near=known.slice().sort((a,b)=>levenshtein(a,k)-levenshtein(b,k))[0];hint.push("「"+name+"」有一個我不認得的欄位「"+k+"」，會先略過。你是不是想寫「"+near+"」？")}})}
+  rows.forEach((r,n)=>{
+   (REQ[name]||[]).forEach(f=>{if(!r[f])todo.push("「"+name+"」第 "+(n+1)+" 列的「"+f+"」還沒填～這一欄要有內容。")});
+   const lim=LIM[name]||{};Object.keys(lim).forEach(f=>{const v=r[f]||"";if(v&&(v.length>lim[f][1]||v.length<lim[f][0]))warn.push("「"+name+"」第 "+(n+1)+" 列的「"+f+"」有 "+v.length+" 個字，建議 "+(lim[f][0]?lim[f][0]+"–":"")+lim[f][1]+" 字，畫面比較不會擠。")});
+  });
+ }
+ if((X["1_全站設定"]||[]).length>1)todo.push("「1_全站設定」只要一列就好～");
+ const cats=new Set((X["2_類別表"]||[]).map(r=>r["代號"]).filter(Boolean)),ents=new Set((X["4_實體表"]||[]).map(r=>r["代號"]).filter(Boolean)),srcs=new Set((X["6_來源表"]||[]).map(r=>r["來源代號"]).filter(Boolean));
+ const near=(v,set)=>{const a=[...set].sort((x,y)=>levenshtein(x,v)-levenshtein(y,v))[0];return a?"你是不是想寫「"+a+"」？":""};
+ (X["2_類別表"]||[]).forEach(r=>{if(r["識別色"]&&!/^#[0-9a-fA-F]{6}$/.test(r["識別色"]))todo.push("類別「"+r["名稱"]+"」的識別色要寫成 #RRGGBB，例如 #c8643b。")});
+ (X["3_步驟表"]||[]).forEach(r=>{if(r["類別代號"]&&!cats.has(r["類別代號"]))todo.push("步驟 "+r["順序"]+" 的類別代號「"+r["類別代號"]+"」在類別表找不到。"+near(r["類別代號"],cats));if(r["實體代號"]&&!ents.has(r["實體代號"]))todo.push("步驟 "+r["順序"]+" 的實體代號「"+r["實體代號"]+"」在實體表找不到。"+near(r["實體代號"],ents))});
+ (X["4_實體表"]||[]).forEach(r=>{if(r["類別代號"]&&!cats.has(r["類別代號"]))todo.push("實體「"+r["名稱"]+"」的類別代號「"+r["類別代號"]+"」在類別表找不到。"+near(r["類別代號"],cats))});
+ const quad=(tag,r,k)=>{const f=["數值","單位","標籤","年份","來源"],v=f.map(x=>r["數據"+k+x]||"");if(v.some(Boolean)&&!v.every(Boolean)){hint.push(tag+"的數據"+k+"缺「"+f.filter((x,i)=>!v[i]).join("、")+"」，這一格先隱藏。")}if(v[4]&&!srcs.has(v[4]))todo.push(tag+"的數據"+k+"，來源代號「"+v[4]+"」在來源表找不到。"+near(v[4],srcs))};
+ (X["3_步驟表"]||[]).forEach(r=>[1,2,3].forEach(k=>quad("步驟 "+r["順序"],r,k)));(X["4_實體表"]||[]).forEach(r=>[1,2].forEach(k=>quad("實體「"+r["名稱"]+"」",r,k)));
+ (X["2_類別表"]||[]).forEach(r=>{const g=r["地面"]||"",ed=r["邊界"]||"";
+  if(g&&!/磚|草|木|地板|brick|grass|wood/i.test(g))hint.push("類別「"+r["名稱"]+"」的地面「"+g+"」我不認得，會改用自動搭配（可以寫：紅磚、草地、木地板）。");
+  if(ed&&!/籬|綠|柵|木|混|原|無|hedge|fence|mix|plain|none/i.test(ed))hint.push("類別「"+r["名稱"]+"」的邊界「"+ed+"」我不認得，會改用自動搭配（可以寫：綠籬、木柵欄、原樣、混搭）。");
+  const m=(X["4_實體表"]||[]).filter(e=>e["類別代號"]===r["代號"]).length;if(m>6)warn.push("類別「"+r["名稱"]+"」有 "+m+" 個項目，一座島最多放 6 個項目；超過 6 個太擠，建議拆成兩個分類。")});
+ const nc=cats.size,ns=(X["3_步驟表"]||[]).length;
+ if(nc&&(nc<4||nc>6))warn.push("分類有 "+nc+" 個，建議 4–6 個，超過 7 個讀者會記不住顏色。");
+ if(ns&&(ns<6||ns>12))warn.push("導覽有 "+ns+" 步，建議 6–12 步。");
+ return {todo,warn,hint,summary:nc+" 個分類、"+(X["4_實體表"]||[]).length+" 個項目、導覽 "+ns+" 步"};
+}
+function toData(X){
+ const s=(X["1_全站設定"]||[])[0]||{};
+ const stat=(r,k)=>({value:r["數據"+k+"數值"]||"",unit:r["數據"+k+"單位"]||"",label:r["數據"+k+"標籤"]||"",year:r["數據"+k+"年份"]||"",src:r["數據"+k+"來源"]||""});
+ const steps=(X["3_步驟表"]||[]).slice().sort((a,b)=>(parseFloat(a["順序"])||0)-(parseFloat(b["順序"])||0));
+ return {site:{title:s["標題"]||"",subtitle:s["副標"]||"",tagline:s["開場標語"]||"",intro:s["導言"]||"",remember:[1,2,3].map(i=>s["記得的事"+i]||""),outro:s["收束結語"]||"",cta:s["聯絡方式"]||"",metaphor:s["隱喻世界"]||"",brandColor:s["品牌色"]||"",template:s["範本"]||"town"},
+ categories:(X["2_類別表"]||[]).map(r=>({id:r["代號"],name:r["名稱"],color:r["識別色"],pitch:r["一句話定位"]||"",shape:r["隱喻造型"]||"",ground:r["地面"]||"",edge:r["邊界"]||""})),
+ steps:steps.map(r=>({cat:r["類別代號"],entity:r["實體代號"],headline:r["宣告標題"],sub:r["宣告副句"]||"",stats:[1,2,3].map(k=>stat(r,k)),caseType:r["案例類型"]||"",caseText:r["案例內容"]||"",body:r["說明文字"]||"",image:r["圖片檔名"]||""})),
+ entities:(X["4_實體表"]||[]).map(r=>({id:r["代號"],name:r["名稱"],cat:r["類別代號"],highlight:r["一句話亮點"]||"",stat1:stat(r,1),stat2:stat(r,2),intro:r["簡介"]||"",history:r["沿革"]||"",howto:r["怎麼使用／申請"]||"",resources:[1,2,3].map(i=>({name:r["資源"+i+"名稱"]||"",url:r["資源"+i+"連結"]||""})),contact:r["聯絡窗口"]||"",image:r["圖片檔名"]||""})),
+ dynamics:(X["5_動態元素表"]||[]).map(r=>({name:r["名稱"],meaning:r["象徵什麼"]||"",near:r["出現位置"]||"",label:r["地標文字"]||""})),
+ sources:(X["6_來源表"]||[]).map(r=>({id:r["來源代號"],name:r["來源名稱"],url:r["連結"]||"",year:r["年份"]||"",method:r["算法說明"]||"",provider:r["提供人"]||""}))};
+}
+function siteHtml(data){const js=JSON.stringify(data).replace(/</g,"\\u003c").split(String.fromCharCode(8232)).join("\\u2028").split(String.fromCharCode(8233)).join("\\u2029");return ENGINE.split("__SITE_DATA__").join(js)}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let cur=null,timer=null;
+function run(){
+ const text=$("#src").value;
+ if(!text.trim()){$("#msg").innerHTML="";$("#dl").disabled=true;cur=null;$("#pv").innerHTML='<div id="empty">預覽會出現在這裡～<br>先貼上六張表，或按「載入範例看看」。</div>';return}
+ const {X,seen}=parse(text),r=check(X,seen);
+ const blocks=[];
+ if(!r.todo.length)blocks.push('<p class="ok">檢查通過！'+esc(r.summary)+" ✿</p>");
+ const fmt=(cls,title,list)=>list.length?'<div class="'+cls+'"><h3>'+title+" "+list.length+'</h3><ul>'+list.map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul></div>":"";
+ blocks.push(fmt("todo","要處理",r.todo),fmt("warn","提醒",r.warn),fmt("hint","小提示",r.hint));
+ $("#msg").innerHTML=blocks.join("");
+ if(r.todo.length){$("#dl").disabled=true;return}
+ const html=siteHtml(toData(X));cur={html,title:(X["1_全站設定"][0]["標題"]||"導覽網站")};
+ $("#dl").disabled=false;
+ const f=document.createElement("iframe");f.setAttribute("sandbox","allow-scripts");f.title="預覽";f.srcdoc=html;$("#pv").innerHTML="";$("#pv").appendChild(f);
+}
+const later=()=>{clearTimeout(timer);timer=setTimeout(run,450)};
+$("#src").addEventListener("input",later);
+$("#load").addEventListener("click",()=>{$("#src").value=JSON.parse($("#sample").textContent);run()});
+$("#file").addEventListener("click",()=>$("#fi").click());
+$("#fi").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;f.text().then(x=>{$("#src").value=x;run()})});
+$("#dl").addEventListener("click",()=>{if(!cur)return;const b=new Blob([cur.html],{type:"text/html;charset=utf-8"}),a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=cur.title.replace(/[\\/:*?"<>|\s]+/g,"_")+"_導覽網站.html";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000)});
+
+/* 「請 AI 整理」說明視窗：指令由欄位定義自動產生，欄位改了這裡會跟著改 */
+function aiPrompt(){
+ const lim=[];for(const sh of Object.keys(LIM))for(const f of Object.keys(LIM[sh])){const [a,b]=LIM[sh][f];lim.push(f+(a>0?" "+a+"–"+b:" ≤"+b)+" 字")}
+ const tables=SHEETS.map(n=>"## "+n+"\n| "+HEAD[n].join(" | ")+" |").join("\n\n");
+ return ["你是「導覽網站資料整理員」。我會給你一份原始資料，請你整理成 3D 導覽網站要用的「六張表」。","",
+ "【先做這件事】先用不超過 200 字說明：①你的整理邏輯（為什麼這樣分類、導覽主線怎麼排）②你假設的讀者對象 ③哪些格子是你推論的（請逐一列出）④哪些因為資料裡沒有而留空。說完請我核對，我會用口語告訴你要改哪裡。我說「好」之前，不要輸出最終版。","",
+ "【我說「好」之後】把「完整的六張表」放進同一個程式碼區塊。每張表前用標題，內容是 Markdown 表格，欄位名稱請一字不改：","",tables,"",
+ "【規則】",
+ "1. 資料裡沒有的就留空，不要編造數字、案例或連結。每個數據要有「數值、單位、標籤、年份、來源」五件事，缺一就整組留空。",
+ "2. 案例要真人真事（可去識別化）；資料裡沒有就留空，不要杜撰。",
+ "3. 分類 4–6 個，每個分類最多 6 個項目，超過請拆成兩個分類；每個分類給一個柔和的識別色（#RRGGBB）。",
+ "4. 步驟表是導覽主線，6–12 步；先排步驟再補實體表；步驟、實體與分類用代號對應，代號要一致。每個數據都要在來源表有一列。",
+ "5. 隱喻造型寫建築的樣子，用這些字會對應到外型：牆／盾／防→城牆；塔／網路／天線／燈→高塔；圓／穹／雲／平台／資料／中心／園→圓頂；門／入口／窗口／橋／櫃台→門；其他→小屋。",
+ "6. 動態元素 8–12 項，每項說得出和內容的關係，慢、小、低調。名稱帶「流／水／封包」會沿道路流動，「燈／閃／亮」會閃爍，「人／學生／行人」會多一位行人，「樹／風／旗／雲」會擺動，「吊車／齒輪／風車」會旋轉。",
+ "7. 字數上限："+lim.join("、")+"。",
+ "8. 語氣像細心又不囉嗦的同事：說人話，從讀者的角度寫。",
+ "9. 我修改之後，每次都重新輸出完整的六張表。"].join("\n")}
+(function(){const d=$("#dlg2");if(!d)return;$("#about").onclick=()=>typeof d.showModal==="function"?d.showModal():d.setAttribute("open","");$("#dx2").onclick=()=>d.close?d.close():d.removeAttribute("open");d.addEventListener("click",e=>{if(e.target===d)d.close()})})();
+(function(){const d=$("#dlg");if(!d)return;const open=()=>{$("#pt").textContent=aiPrompt();$("#cpok").textContent="";typeof d.showModal==="function"?d.showModal():d.setAttribute("open","")};
+ $("#how").onclick=open;$("#dx").onclick=()=>d.close?d.close():d.removeAttribute("open");
+ d.addEventListener("click",e=>{if(e.target===d)d.close()});
+ $("#cp").onclick=async()=>{const txt=aiPrompt();try{await navigator.clipboard.writeText(txt);$("#cpok").textContent="已複製～去貼給 AI 吧"}catch(e){const r=document.createRange();r.selectNodeContents($("#pt"));const se=getSelection();se.removeAllRanges();se.addRange(r);$("#cpok").textContent="請按 Ctrl／⌘ + C 複製（已幫你選好）"}}})();
+window.__b={parse,check,toData,run,aiPrompt,setText:v=>{$("#src").value=v;run()}};
+</script>
+</body>
+</html>
