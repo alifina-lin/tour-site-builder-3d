@@ -27,9 +27,11 @@ dialog{width:min(720px,94vw);max-height:88vh;border:0;border-radius:16px;padding
 #msg{max-height:34%;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:13.5px}
 #msg h3{margin:6px 0 2px;font-size:13px}#msg ul{margin:0 0 4px;padding-left:18px}
 .ok{color:var(--ok);font-weight:700}.todo h3{color:var(--bad)}.hint h3{color:var(--warn)}
-.map{margin:8px 0 2px;padding-top:6px;border-top:1px dashed var(--line)}.map h3{color:var(--ink)}.map small{color:var(--muted);font-weight:400}.map ul{list-style:none;padding-left:0}.map li{margin:1px 0}.au{color:var(--warn);font-weight:700;cursor:help}#msg button{padding:6px 12px;font-size:13px;margin:4px 0 2px}
 #pv{flex:1;min-height:0;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#dfe9e6;position:relative}
 #pv iframe{width:100%;height:100%;border:0;display:block}
+.tplbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13.5px;color:var(--muted)}.tplbar b{color:var(--ink);margin-right:2px}
+.tplbar button{padding:6px 12px;font-weight:700;background:#e6ebe8}.tplbar button[aria-checked="true"]{background:var(--ink);color:#fff}
+.tplbar small{color:var(--faint)}
 #empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--muted);padding:24px}
 @media(max-width:820px){main{grid-template-columns:1fr;height:auto}.col{min-height:auto}textarea{min-height:200px}#pv{height:70vh;flex:none}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -45,15 +47,15 @@ dialog{width:min(720px,94vw);max-height:88vh;border:0;border-radius:16px;padding
   <div id="msg" aria-live="polite"></div>
   <input type="file" id="fi" accept=".md,.txt,.tsv,.csv" hidden>
  </section>
- <section class="col" aria-label="預覽"><div id="pv"><div id="empty">預覽會出現在這裡～<br>先貼上六張表，或按「載入範例看看」。</div></div></section>
+ <section class="col" aria-label="預覽"><div class="tplbar" role="radiogroup" aria-label="版型"><b>版型</b><button type="button" role="radio" aria-checked="true" data-t="islands">小島</button><button type="button" role="radio" aria-checked="false" data-t="tower">大樓</button><button type="button" role="radio" aria-checked="false" data-t="market">市集</button><small id="tplnote">換版型只改畫面，內容不變</small></div><div id="pv"><div id="empty">預覽會出現在這裡～<br>先貼上六張表，或按「載入範例看看」。</div></div></section>
 </main>
 <dialog id="dlg" aria-labelledby="dt"><div class="dh"><h2 id="dt">怎麼請 AI 把原始資料整理成六張表？</h2><button type="button" id="dx" aria-label="關閉">關閉</button></div><div class="db">
 <ol>
 <li><b>打開任何一個你慣用的 AI</b>（Gemini、Copilot、ChatGPT、Claude 都可以）。</li>
 <li><b>複製下面的指令，貼給 AI</b>，再把你的原始資料貼上去，或附上檔案。<div class="row"><button type="button" id="cp" class="pri">複製指令</button><span id="cpok" aria-live="polite" class="ok"></span></div><pre id="pt" tabindex="0"></pre></li>
-<li><b>AI 會先用 200 字內說明</b>它的整理邏輯、假設的讀者，以及哪些格子是推論的。請你核對，用口語說要改哪裡（例如「第二個分類改成……」）。它還會附兩張對應確認表（每個類別長什麼樣子、動態元素怎麼動），一起看一眼。</li>
+<li><b>AI 會先用 200 字內說明</b>它的整理邏輯、假設的讀者，以及哪些格子是推論的。請你核對，用口語說要改哪裡（例如「第二個分類改成……」）。</li>
 <li><b>你說「好」之後</b>，請 AI「把完整的六張表放進同一個程式碼區塊」，按程式碼區塊右上角的複製鈕。</li>
-<li><b>貼到這個頁面左邊的格子</b>，右邊就會長出預覽，左邊也會用白話告訴你哪裡還要處理，並列出「我讀到的樣式」。如果有格子不在清單內，會出現「複製修正指令」，貼回原本那個 AI 對話，它就知道要改哪幾格。</li>
+<li><b>貼到這個頁面左邊的格子</b>，右邊就會長出預覽，左邊也會用白話告訴你哪裡還要處理。</li>
 </ol>
 <p class="note"><b>小提醒：</b>原始資料送到哪個 AI，就依那個 AI 的規範處理，個人資料請先去除。數字與案例請再對照原文確認一次，AI 沒把握的格子會被它列在說明裡。</p>
 </div></dialog>
@@ -96,36 +98,6 @@ function parse(text){
  return {X,seen};
 }
 const levenshtein=(a,b)=>{const m=[];for(let i=0;i<=a.length;i++){m[i]=[i]}for(let j=0;j<=b.length;j++)m[0][j]=j;for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)m[i][j]=Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return m[a.length][b.length]};
-/* ===== 樣式辨識：和畫面引擎用同一套關鍵字，所以這裡讀到的，就是畫面上會長出來的樣子 ===== */
-const SHAPES=[["城牆",/牆|盾|防|資安|安全/],["高塔",/塔|管線|網路|天線|燈|通訊/],["圓頂",/圓|穹|球|雲|平台|資料|中心|園/],["門",/門|入口|窗口|橋|櫃台|服務台/]];
-const HOUSE=/屋|舍|樓|房|house/i;
-const GROUNDS=[["紅磚",/磚|brick/i],["草地",/草|grass/i],["木地板",/木|地板|wood/i]];
-const EDGES=[["綠籬",/籬|綠|hedge/i],["木柵欄",/柵|木|fence/i],["混搭",/混|mix/i],["原樣",/原|無|plain|none/i]];
-const EFFECTS=[["沿路流動",/封包|流|資料|水|列車|車流|訊號/],["閃爍",/燈|閃|亮|指示/],["多一位行人",/人|走|師生|學生|遊客|行人/],["擺動",/樹|搖|風|旗|雲/],["旋轉",/吊車|轉|齒輪|風車|雷達/]];
-const LIST={shape:"城牆／高塔／圓頂／門／小屋",ground:"紅磚／草地／木地板",edge:"綠籬／木柵欄／混搭／原樣"};
-const pick=(L,v)=>{v=String(v||"");for(const [n,re] of L)if(re.test(v))return n;return ""};
-const hitAll=(L,v)=>L.filter(([n,re])=>re.test(String(v||""))).map(x=>x[0]);
-function styleOf(r){
- const nm=r["名稱"]||"",sv=r["隱喻造型"]||"",gv=r["地面"]||"",ev=r["邊界"]||"",tag="「"+nm+"」",T="2_類別表"+tag,o={name:nm,shape:"",ground:"",edge:"",aS:"",aG:"",aE:"",fix:[]};
- const sh=pick(SHAPES,sv);
- if(!sv){o.shape=pick(SHAPES,nm)||"小屋";o.aS="沒填，改依類別名稱判斷";o.fix.push(T+"的「隱喻造型」沒填 → 請從 "+LIST.shape+" 選一個填")}
- else if(sh){o.shape=sh;const h=hitAll(SHAPES,sv);if(h.length>1){o.aS="同時含有"+h.join("、")+"的字，取「"+sh+"」";o.fix.push(T+"的「隱喻造型」寫成「"+sv+"」，同時對到多種類型 → 請只填一個："+LIST.shape)}}
- else if(HOUSE.test(sv))o.shape="小屋";
- else{o.shape="小屋";o.aS="「"+sv+"」不在清單內，畫成小屋";o.fix.push(T+"的「隱喻造型」寫成「"+sv+"」，不在清單內 → 請改成 "+LIST.shape+" 其中一個（一字不改）")}
- const gk=pick(GROUNDS,gv),ek=pick(EDGES,ev);
- if(!gv&&!ev){o.ground=o.edge="系統代選";o.aG=o.aE="地面、邊界都沒填，系統自動搭配";o.fix.push(T+"的「地面」「邊界」沒填 → 地面請從 "+LIST.ground+" 選、邊界請從 "+LIST.edge+" 選")}
- else{
-  if(gk)o.ground=gk;else{o.ground="系統代選";o.aG=gv?"「"+gv+"」不在清單內，系統自動搭配":"沒填，系統自動搭配";o.fix.push(T+"的「地面」"+(gv?"寫成「"+gv+"」，不在清單內":"沒填")+" → 請從 "+LIST.ground+" 選一個")}
-  if(ek)o.edge=ek;else{o.edge="系統代選";o.aE=ev?"「"+ev+"」不在清單內，系統自動搭配":"沒填，系統自動搭配";o.fix.push(T+"的「邊界」"+(ev?"寫成「"+ev+"」，不在清單內":"沒填")+" → 請從 "+LIST.edge+" 選一個")}
- }
- return o}
-function dynOf(r){
- const nm=r["名稱"]||"",me=r["象徵什麼"]||"",all=pick(EFFECTS,nm+me),bn=pick(EFFECTS,nm),o={name:nm,effect:all||"輕輕漂浮",note:"",fix:[]};
- if(!all)o.note="沒對到動態關鍵字，只會輕輕漂浮（刻意的話可以不理它）";
- else if(bn&&bn!==all){o.note="名稱像「"+bn+"」，但『象徵什麼』裡有排序更前面的關鍵字，畫面會變成「"+all+"」";o.fix.push("5_動態元素表「"+nm+"」：名稱像「"+bn+"」，但『象徵什麼』裡的字讓它變成「"+all+"」 → 請改寫『象徵什麼』，避開排序更前面的效果關鍵字（流動＞閃爍＞行人＞擺動＞旋轉）")}
- else if(!bn)o.note="名稱沒有關鍵字，效果是靠『象徵什麼』裡的字觸發（"+all+"）";
- return o}
-function fixPrompt(fix){return ["下面這幾格不符合規則，請只改這些格子、其他內容不要動，然後重新輸出「完整的六張表」（放在同一個程式碼區塊），輸出前請再做一次規則 10 的自我檢查：",""].concat(fix.map((x,i)=>(i+1)+". "+x),["","可用清單：","・隱喻造型："+LIST.shape,"・地面："+LIST.ground,"・邊界："+LIST.edge]).join("\n")}
 function check(X,seen){
  const todo=[],warn=[],hint=[];
  for(const s of SHEETS)if(seen.indexOf(s)<0)todo.push("找不到「"+s+"」這張表～請確認有一行像「## "+s+"」的標題。");
@@ -145,20 +117,20 @@ function check(X,seen){
  (X["4_實體表"]||[]).forEach(r=>{if(r["類別代號"]&&!cats.has(r["類別代號"]))todo.push("實體「"+r["名稱"]+"」的類別代號「"+r["類別代號"]+"」在類別表找不到。"+near(r["類別代號"],cats))});
  const quad=(tag,r,k)=>{const f=["數值","單位","標籤","年份","來源"],v=f.map(x=>r["數據"+k+x]||"");if(v.some(Boolean)&&!v.every(Boolean)){hint.push(tag+"的數據"+k+"缺「"+f.filter((x,i)=>!v[i]).join("、")+"」，這一格先隱藏。")}if(v[4]&&!srcs.has(v[4]))todo.push(tag+"的數據"+k+"，來源代號「"+v[4]+"」在來源表找不到。"+near(v[4],srcs))};
  (X["3_步驟表"]||[]).forEach(r=>[1,2,3].forEach(k=>quad("步驟 "+r["順序"],r,k)));(X["4_實體表"]||[]).forEach(r=>[1,2].forEach(k=>quad("實體「"+r["名稱"]+"」",r,k)));
- (X["2_類別表"]||[]).forEach(r=>{
+ (X["2_類別表"]||[]).forEach(r=>{const g=r["地面"]||"",ed=r["邊界"]||"";
+  if(g&&!/磚|草|木|地板|brick|grass|wood/i.test(g))hint.push("類別「"+r["名稱"]+"」的地面「"+g+"」我不認得，會改用自動搭配（可以寫：紅磚、草地、木地板）。");
+  if(ed&&!/籬|綠|柵|木|混|原|無|hedge|fence|mix|plain|none/i.test(ed))hint.push("類別「"+r["名稱"]+"」的邊界「"+ed+"」我不認得，會改用自動搭配（可以寫：綠籬、木柵欄、原樣、混搭）。");
   const m=(X["4_實體表"]||[]).filter(e=>e["類別代號"]===r["代號"]).length;if(m>6)warn.push("類別「"+r["名稱"]+"」有 "+m+" 個項目，一座島最多放 6 個項目；超過 6 個太擠，建議拆成兩個分類。")});
  const nc=cats.size,ns=(X["3_步驟表"]||[]).length;
  if(nc&&(nc<4||nc>6))warn.push("分類有 "+nc+" 個，建議 4–6 個，超過 7 個讀者會記不住顏色。");
  if(ns&&(ns<6||ns>12))warn.push("導覽有 "+ns+" 步，建議 6–12 步。");
- const style=(X["2_類別表"]||[]).map(styleOf),dyn=(X["5_動態元素表"]||[]).map(dynOf),fix=[].concat(...style.map(x=>x.fix),...dyn.map(x=>x.fix));
- const bc=((X["1_全站設定"]||[])[0]||{})["品牌色"]||"";if(bc&&!/^#[0-9a-fA-F]{6}$/.test(bc)){hint.push("品牌色「"+bc+"」要寫成 #RRGGBB（例如 #c8643b），這次會先用預設色。");fix.push("1_全站設定的「品牌色」要寫成 #RRGGBB（例如 #c8643b） → 請改正；沒有品牌色就留空")}
- return {todo,warn,hint,style,dyn,fix,summary:nc+" 個分類、"+(X["4_實體表"]||[]).length+" 個項目、導覽 "+ns+" 步"};
+ return {todo,warn,hint,summary:nc+" 個分類、"+(X["4_實體表"]||[]).length+" 個項目、導覽 "+ns+" 步"};
 }
 function toData(X){
  const s=(X["1_全站設定"]||[])[0]||{};
  const stat=(r,k)=>({value:r["數據"+k+"數值"]||"",unit:r["數據"+k+"單位"]||"",label:r["數據"+k+"標籤"]||"",year:r["數據"+k+"年份"]||"",src:r["數據"+k+"來源"]||""});
  const steps=(X["3_步驟表"]||[]).slice().sort((a,b)=>(parseFloat(a["順序"])||0)-(parseFloat(b["順序"])||0));
- return {site:{title:s["標題"]||"",subtitle:s["副標"]||"",tagline:s["開場標語"]||"",intro:s["導言"]||"",remember:[1,2,3].map(i=>s["記得的事"+i]||""),outro:s["收束結語"]||"",cta:s["聯絡方式"]||"",metaphor:s["隱喻世界"]||"",brandColor:/^#[0-9a-fA-F]{6}$/.test(s["品牌色"]||"")?s["品牌色"]:"",template:s["範本"]||"town"},
+ return {site:{title:s["標題"]||"",subtitle:s["副標"]||"",tagline:s["開場標語"]||"",intro:s["導言"]||"",remember:[1,2,3].map(i=>s["記得的事"+i]||""),outro:s["收束結語"]||"",cta:s["聯絡方式"]||"",metaphor:s["隱喻世界"]||"",brandColor:s["品牌色"]||"",template:s["範本"]||"town"},
  categories:(X["2_類別表"]||[]).map(r=>({id:r["代號"],name:r["名稱"],color:r["識別色"],pitch:r["一句話定位"]||"",shape:r["隱喻造型"]||"",ground:r["地面"]||"",edge:r["邊界"]||""})),
  steps:steps.map(r=>({cat:r["類別代號"],entity:r["實體代號"],headline:r["宣告標題"],sub:r["宣告副句"]||"",stats:[1,2,3].map(k=>stat(r,k)),caseType:r["案例類型"]||"",caseText:r["案例內容"]||"",body:r["說明文字"]||"",image:r["圖片檔名"]||""})),
  entities:(X["4_實體表"]||[]).map(r=>({id:r["代號"],name:r["名稱"],cat:r["類別代號"],highlight:r["一句話亮點"]||"",stat1:stat(r,1),stat2:stat(r,2),intro:r["簡介"]||"",history:r["沿革"]||"",howto:r["怎麼使用／申請"]||"",resources:[1,2,3].map(i=>({name:r["資源"+i+"名稱"]||"",url:r["資源"+i+"連結"]||""})),contact:r["聯絡窗口"]||"",image:r["圖片檔名"]||""})),
@@ -167,14 +139,11 @@ function toData(X){
 }
 function siteHtml(data){const js=JSON.stringify(data).replace(/</g,"\\u003c").split(String.fromCharCode(8232)).join("\\u2028").split(String.fromCharCode(8233)).join("\\u2029");return ENGINE.split("__SITE_DATA__").join(js)}
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-function styleBlock(r){
- if(!r.style.length&&!r.dyn.length)return "";
- const f=(txt,note)=>note?'<span class="au" title="'+esc(note)+'">'+esc(txt)+"（自動）</span>":esc(txt);
- const li=r.style.map(x=>"<li><b>"+esc(x.name)+"</b>：造型 "+f(x.shape,x.aS)+"｜地面 "+f(x.ground,x.aG)+"｜邊界 "+f(x.edge,x.aE)+"</li>").join("");
- const dy=r.dyn.map(d=>esc(d.name)+"→"+(d.note?'<span class="au" title="'+esc(d.note)+'">'+esc(d.effect)+"</span>":esc(d.effect))).join("、");
- return '<div class="map"><h3>我讀到的樣式 <small>橘色＝清單外或沒填，畫面會自動搭配（滑鼠移上去看原因）</small></h3>'+(li?"<ul>"+li+"</ul>":"")+(dy?"<p><small>動態元素：</small>"+dy+"</p>":"")+(r.fix.length?'<button type="button" id="fixcp" class="pri">複製修正指令（'+r.fix.length+' 處）</button> <small>貼回原本那個 AI 對話，請它只改這幾格</small>':"")+"</div>"}
-async function copyText(txt,btn){const old=btn.textContent;let ok=true;try{await navigator.clipboard.writeText(txt)}catch(e){const ta=document.createElement("textarea");ta.value=txt;ta.style.cssText="position:fixed;opacity:0";document.body.appendChild(ta);ta.select();try{ok=document.execCommand("copy")}catch(_){ok=false}ta.remove()}btn.textContent=ok?"已複製～貼回原本那個 AI 對話":"複製失敗，請改用 Ctrl／⌘ + C";setTimeout(()=>{btn.textContent=old},3000)}
-let cur=null,timer=null,lastFix="";
+let cur=null,timer=null,tplPick=null;
+/* 版型：表格「範本」欄有寫就照表格；使用者在右上點選後以點選為準 */
+const TPL_NAME={islands:"小島",tower:"大樓",market:"市集"};
+const tplOf=v=>{const t=String(v||"").trim();return /^(tower|大樓|科技大樓)$/i.test(t)?"tower":/^(market|市集)$/i.test(t)?"market":"islands"};
+function paintTpl(t){document.querySelectorAll(".tplbar button").forEach(b=>b.setAttribute("aria-checked",String(b.dataset.t===t)))}
 function run(){
  const text=$("#src").value;
  if(!text.trim()){$("#msg").innerHTML="";$("#dl").disabled=true;cur=null;$("#pv").innerHTML='<div id="empty">預覽會出現在這裡～<br>先貼上六張表，或按「載入範例看看」。</div>';return}
@@ -182,61 +151,46 @@ function run(){
  const blocks=[];
  if(!r.todo.length)blocks.push('<p class="ok">檢查通過！'+esc(r.summary)+" ✿</p>");
  const fmt=(cls,title,list)=>list.length?'<div class="'+cls+'"><h3>'+title+" "+list.length+'</h3><ul>'+list.map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul></div>":"";
- blocks.push(fmt("todo","要處理",r.todo),fmt("warn","提醒",r.warn),fmt("hint","小提示",r.hint),styleBlock(r));lastFix=r.fix.length?fixPrompt(r.fix):"";
+ blocks.push(fmt("todo","要處理",r.todo),fmt("warn","提醒",r.warn),fmt("hint","小提示",r.hint));
  $("#msg").innerHTML=blocks.join("");
  if(r.todo.length){$("#dl").disabled=true;return}
- const html=siteHtml(toData(X));cur={html,title:(X["1_全站設定"][0]["標題"]||"導覽網站")};
+ const data=toData(X),tpl=tplPick||tplOf(data.site.template);data.site.template=tpl;paintTpl(tpl);
+ const html=siteHtml(data);cur={html,tpl,title:(X["1_全站設定"][0]["標題"]||"導覽網站")};
  $("#dl").disabled=false;
  const f=document.createElement("iframe");f.setAttribute("sandbox","allow-scripts");f.title="預覽";f.srcdoc=html;$("#pv").innerHTML="";$("#pv").appendChild(f);
 }
 const later=()=>{clearTimeout(timer);timer=setTimeout(run,450)};
+document.querySelectorAll(".tplbar button").forEach(b=>b.addEventListener("click",()=>{tplPick=b.dataset.t;paintTpl(tplPick);run()}));
 $("#src").addEventListener("input",later);
-$("#msg").addEventListener("click",e=>{const b=e.target.closest&&e.target.closest("#fixcp");if(b&&lastFix)copyText(lastFix,b)});
 $("#load").addEventListener("click",()=>{$("#src").value=JSON.parse($("#sample").textContent);run()});
 $("#file").addEventListener("click",()=>$("#fi").click());
 $("#fi").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;f.text().then(x=>{$("#src").value=x;run()})});
-$("#dl").addEventListener("click",()=>{if(!cur)return;const b=new Blob([cur.html],{type:"text/html;charset=utf-8"}),a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=cur.title.replace(/[\\/:*?"<>|\s]+/g,"_")+"_導覽網站.html";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000)});
+$("#dl").addEventListener("click",()=>{if(!cur)return;const b=new Blob([cur.html],{type:"text/html;charset=utf-8"}),a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=cur.title.replace(/[\\/:*?"<>|\s]+/g,"_")+"_導覽網站_"+(TPL_NAME[cur.tpl]||"小島")+".html";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000)});
 
 /* 「請 AI 整理」說明視窗：指令由欄位定義自動產生，欄位改了這裡會跟著改 */
 function aiPrompt(){
  const lim=[];for(const sh of Object.keys(LIM))for(const f of Object.keys(LIM[sh])){const [a,b]=LIM[sh][f];lim.push(f+(a>0?" "+a+"–"+b:" ≤"+b)+" 字")}
  const tables=SHEETS.map(n=>"## "+n+"\n| "+HEAD[n].join(" | ")+" |").join("\n\n");
  return ["你是「導覽網站資料整理員」。我會給你一份原始資料，請你整理成 3D 導覽網站要用的「六張表」。","",
- "【先做這件事】先用不超過 200 字說明：①你的整理邏輯（為什麼這樣分類、導覽主線怎麼排）②你假設的讀者對象 ③哪些格子是你推論的（請逐一列出）④哪些因為資料裡沒有而留空。","接著附上兩張「對應確認表」（不計入 200 字），讓我核對你選的樣式：","(a) 類別樣式：| 類別代號 | 名稱 | 隱喻造型 | 地面 | 邊界 | 為什麼這樣選 |","(b) 動態元素：| 名稱 | 想要的效果 | 命中的關鍵字 |","說完請我核對，我會用口語告訴你要改哪裡。我說「好」之前，不要輸出最終版。","",
+ "【先做這件事】先用不超過 200 字說明：①你的整理邏輯（為什麼這樣分類、導覽主線怎麼排）②你假設的讀者對象 ③哪些格子是你推論的（請逐一列出）④哪些因為資料裡沒有而留空。說完請我核對，我會用口語告訴你要改哪裡。我說「好」之前，不要輸出最終版。","",
  "【我說「好」之後】把「完整的六張表」放進同一個程式碼區塊。每張表前用標題，內容是 Markdown 表格，欄位名稱請一字不改：","",tables,"",
  "【規則】",
  "1. 資料裡沒有的就留空，不要編造數字、案例或連結。每個數據要有「數值、單位、標籤、年份、來源」五件事，缺一就整組留空。",
  "2. 案例要真人真事（可去識別化）；資料裡沒有就留空，不要杜撰。",
  "3. 分類 4–6 個，每個分類最多 6 個項目，超過請拆成兩個分類；每個分類給一個柔和的識別色（#RRGGBB）。",
  "4. 步驟表是導覽主線，6–12 步；先排步驟再補實體表；步驟、實體與分類用代號對應，代號要一致。每個數據都要在來源表有一列。",
- "5. 【類別樣式】2_類別表的「隱喻造型、地面、邊界」每個類別都要填，只能從下面的清單選，一字不改，不可自創、不可加描述、不可留空。清單以外的寫法，畫面會當成不認得，改用預設樣式。",
-  "　・隱喻造型（五選一）：城牆＝守護、安全、規範類；高塔＝網路、通訊、監測、基礎設施類；圓頂＝平台、資料、雲端、核心中心、園地類；門＝入口、申請、對外窗口、櫃台類；小屋＝以上都不適合時（預設）。",
-  "　・地面（三選一）：紅磚、草地、木地板。",
-  "　・邊界（四選一）：綠籬、木柵欄、混搭、原樣。",
-  "　・不確定時：造型填「小屋」；地面與邊界依類別順序填：第 1 類 紅磚＋綠籬、第 2 類 草地＋木柵欄、第 3 類 木地板＋原樣、第 4 類 草地＋混搭、第 5 類 紅磚＋木柵欄、第 6 類 木地板＋綠籬（讓相鄰的島看起來不一樣）。",
-  "6. 【動態元素】8–12 項，每項說得出和內容的關係，慢、小、低調。畫面會依「名稱＋象徵什麼」兩欄的文字找關鍵字來決定效果，由上往下，先符合的先算：",
-  "　・沿路流動：封包、流、資料、水、列車、車流、訊號",
-  "　・閃爍：燈、閃、亮、指示",
-  "　・多一位行人：人、走、師生、學生、遊客、行人",
-  "　・擺動：樹、搖、風、旗、雲",
-  "　・旋轉：吊車、轉、齒輪、風車、雷達",
-  "　・都沒對到：只會輕輕漂浮。",
-  "　想要哪種效果，就讓「名稱」含那一類的關鍵字，並且「象徵什麼」不要出現排在它前面那幾類的關鍵字。單字關鍵字很容易被一般詞組誤觸（例如「流程」會變流動、「人員」會變行人、「雲端」會變擺動、「亮點」會變閃爍）。例：想要閃爍，名稱寫「伺服器指示燈」，象徵什麼寫「系統正常運作的燈號」，不要寫成「資料正在傳送的燈」。刻意只想輕輕漂浮的，才可以都不含關鍵字，並在確認表(b)標成「漂浮」。",
-  "7. 字數上限："+lim.join("、")+"。",
+ "5. 隱喻造型寫建築的樣子，用這些字會對應到外型：牆／盾／防→城牆；塔／網路／天線／燈→高塔；圓／穹／雲／平台／資料／中心／園→圓頂；門／入口／窗口／橋／櫃台→門；其他→小屋。",
+ "6. 動態元素 8–12 項，每項說得出和內容的關係，慢、小、低調。名稱帶「流／水／封包」會沿道路流動，「燈／閃／亮」會閃爍，「人／學生／行人」會多一位行人，「樹／風／旗／雲」會擺動，「吊車／齒輪／風車」會旋轉。",
+ "7. 字數上限："+lim.join("、")+"。",
  "8. 語氣像細心又不囉嗦的同事：說人話，從讀者的角度寫。",
- "9. 我修改之後，每次都重新輸出完整的六張表，並重新做規則 10 的自我檢查。",
-  "10. 【輸出前自我檢查】完整六張表輸出後，在程式碼區塊「外面」逐項寫出檢查結果；有任何一項不合格，先改好再輸出，不要把不合格的結果交給我：",
-  "　・每個類別：「代號：隱喻造型＝○○（在清單內）／地面＝○○（在清單內）／邊界＝○○（在清單內）」",
-  "　・每個動態元素：「名稱：效果＝○○，命中關鍵字＝○○，『象徵什麼』沒有排在前面的關鍵字」",
-  "　・步驟表、實體表的類別代號、實體代號、來源代號，是否都對得上類別表、實體表、來源表。",
-  "11. 其他固定欄位：1_全站設定的「範本」填 town；「品牌色」有就填 #RRGGBB，沒有就留空；「隱喻世界」用一句話寫出整個網站的世界觀（例：數位校園小鎮）。"].join("\n")}
+ "9. 全站設定的「範本」欄填「小島」、「大樓」或「市集」，不確定就留空（會用小島）。小島：每個分類一座小島，輕鬆有趣；大樓：每個分類一層樓、每個項目一間房，適合服務、系統、單位介紹；市集：每個分類一區帳篷、每個項目一個攤位，有人潮可以逛，適合活動、成果展、多元服務介紹。",
+ "9. 我修改之後，每次都重新輸出完整的六張表。"].join("\n")}
 (function(){const d=$("#dlg2");if(!d)return;$("#about").onclick=()=>typeof d.showModal==="function"?d.showModal():d.setAttribute("open","");$("#dx2").onclick=()=>d.close?d.close():d.removeAttribute("open");d.addEventListener("click",e=>{if(e.target===d)d.close()})})();
 (function(){const d=$("#dlg");if(!d)return;const open=()=>{$("#pt").textContent=aiPrompt();$("#cpok").textContent="";typeof d.showModal==="function"?d.showModal():d.setAttribute("open","")};
  $("#how").onclick=open;$("#dx").onclick=()=>d.close?d.close():d.removeAttribute("open");
  d.addEventListener("click",e=>{if(e.target===d)d.close()});
  $("#cp").onclick=async()=>{const txt=aiPrompt();try{await navigator.clipboard.writeText(txt);$("#cpok").textContent="已複製～去貼給 AI 吧"}catch(e){const r=document.createRange();r.selectNodeContents($("#pt"));const se=getSelection();se.removeAllRanges();se.addRange(r);$("#cpok").textContent="請按 Ctrl／⌘ + C 複製（已幫你選好）"}}})();
-window.__b={parse,check,toData,run,aiPrompt,fixPrompt,setText:v=>{$("#src").value=v;run()}};
+window.__b={parse,check,toData,run,aiPrompt,setText:v=>{$("#src").value=v;run()}};
 </script>
 </body>
 </html>
-

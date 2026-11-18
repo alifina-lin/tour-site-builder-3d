@@ -1,0 +1,61 @@
+body.tpl-market .serif{font-family:"Noto Sans TC","Noto Sans CJK TC","PingFang TC","Microsoft JhengHei",sans-serif;letter-spacing:.04em}
+body.tpl-market{--ink:#10283c;--muted:#52697c;--faint:#8aa0b1;--line:rgba(16,40,60,.1);--glass:rgba(255,255,255,.82);--tl:rgba(255,255,255,.74);--sh:0 10px 28px rgba(10,40,70,.16);--lb:rgba(255,255,255,.93);--lboff:rgba(255,255,255,.42);--lbofft:#58708a;--gsh:0 18px 40px rgba(10,40,70,.2)}
+body.tpl-market{background:#dcedf8}
+body.tpl-market #sky .d{background:linear-gradient(180deg,#8ec6ea 0%,#b9dcf2 38%,#dcedf8 70%,#eef6fb 100%)}
+body.tpl-market #sky .n{background:linear-gradient(180deg,#040814 0%,#0a1630 42%,#16294d 78%,#1c3560 100%)}
+body.tpl-market #stage::before{background:radial-gradient(130% 100% at 50% 45%,transparent 70%,rgba(40,100,150,.08) 100%)}
+body.tpl-market #stage::after{background:radial-gradient(70% 45% at 50% 105%,rgba(40,160,255,.16),transparent 70%),radial-gradient(130% 100% at 50% 40%,transparent 55%,rgba(0,5,20,.5) 100%)}
+body.tpl-market.night{--ink:#e4f2ff;--muted:#9db4c8;--faint:#6f869b;--line:rgba(160,200,235,.14);--glass:rgba(10,20,36,.8);--tl:rgba(10,20,36,.72);--sh:0 10px 28px rgba(0,0,0,.4);--lb:rgba(12,24,42,.9);--lboff:rgba(12,24,42,.5);--lbofft:#7f97ad;--gsh:0 18px 40px rgba(0,0,0,.5)}
+body.tpl-market.night .btn,body.tpl-market.night .ib.pri,body.tpl-market.night .chip.cur,body.tpl-market.night .lb.on,body.tpl-market.night #cs .f{color:#06121f}
+body.tpl-market.night .chip{background:var(--lb);color:var(--ink)}
+body.tpl-market.night .chip.cur{background:var(--ink);color:#06121f}
+body.tpl-market.night .chip.ghost{background:transparent;color:var(--muted)}
+body.tpl-market.night .btn.sec,body.tpl-market.night .ib,body.tpl-market.night .tgb,body.tpl-market.night .tags a,body.tpl-market.night .tags span,body.tpl-market.night .it,body.tpl-market.night #card .x,body.tpl-market.night #end .x{background:rgba(160,200,235,.12);color:var(--ink)}
+body.tpl-market.night .btn.sec:hover,body.tpl-market.night .tgb:hover,body.tpl-market.night .it:hover{background:rgba(160,200,235,.2)}
+body.tpl-market.night .ib.pri{background:var(--ink)}
+body.tpl-market.night #d-b .story{background:rgba(80,200,255,.1)}
+body.tpl-market.night .lb{box-shadow:0 4px 14px rgba(0,0,0,.4)}
+body.tpl-market.night #dots button{background:var(--faint)}
+body.tpl-market.night #dots button.cur{background:var(--accent)}
+body.tpl-market .glass{border:1px solid rgba(255,255,255,.55)}
+body.tpl-market.night .glass{border:1px solid rgba(120,190,255,.18)}
+body.tpl-market #tl{border:1px solid rgba(255,255,255,.55)}
+body.tpl-market.night #tl{border:1px solid rgba(120,190,255,.18)}
+body.tpl-market .lb.dy{pointer-events:none;background:var(--lb);color:var(--ink);font-size:12px;font-weight:700;letter-spacing:.06em;padding:7px 11px;border-left:3px solid var(--accent);border-radius:6px;box-shadow:0 4px 14px rgba(10,40,70,.18);text-shadow:none;transform:none}
+body.tpl-market.night .lb.dy{color:var(--ink);box-shadow:0 0 12px rgba(60,170,255,.25)}
+body.tpl-market[data-mode="overview"] .lb:not(.dy){opacity:0;pointer-events:none}
+body.tpl-market[data-mode="island"] .lb.off:not(.dy),body.tpl-market[data-mode="tour"] .lb.off:not(.dy){opacity:0;pointer-events:none}
+body.tpl-market .lb{transition:opacity .35s,background-color .35s,color .35s}
+@media(max-width:760px){body.tpl-market .lb.dy{font-size:11px;padding:5px 8px;max-width:104px;overflow:hidden;text-overflow:ellipsis}
+body.tpl-market .lb.dy.roof{max-width:none}
+}
+body.tpl-market #ftags{position:fixed;inset:0;pointer-events:none;z-index:3;transition:opacity .45s}
+body.tpl-market #ftags.off{opacity:0}
+body.tpl-market #ftags.off .ftag{pointer-events:none}
+body.tpl-market #ftags svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+body.tpl-market #ftags path{fill:none;stroke:var(--ink);stroke-opacity:.5;stroke-width:1.2}
+body.tpl-market #ftags circle{stroke:#fff;stroke-width:1.5}
+body.tpl-market.night #ftags circle{stroke:#0b1626}
+body.tpl-market .ftag{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.6);font:inherit;cursor:pointer;padding:4px 12px 4px 4px;border-radius:9px;background:var(--lb);color:var(--ink);box-shadow:var(--sh);white-space:nowrap;transform:translateY(-50%);transition:transform .2s,background-color .3s}
+body.tpl-market.night .ftag{border-color:rgba(120,190,255,.2)}
+body.tpl-market .ftag b{display:grid;place-items:center;min-width:30px;height:24px;padding:0 4px;border-radius:6px;font-size:12px;color:#fff;background:var(--fc)}
+body.tpl-market .ftag span{font-size:13px;font-weight:700;letter-spacing:.04em}
+body.tpl-market .ftag:hover{transform:translate(4px,-50%)}
+@media(max-width:760px){body.tpl-market .ftag{padding:2px 8px 2px 2px;gap:5px}
+body.tpl-market .ftag b{min-width:24px;height:20px;font-size:11px}
+body.tpl-market .ftag span{font-size:11.5px}
+}
+body.tpl-market .chip i,body.tpl-market .it i,body.tpl-market .lb i{filter:saturate(.35) brightness(1.05)}
+body.tpl-market .ftag b{color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.15)}
+body.tpl-market #sky .d{background:linear-gradient(180deg,#9fcbe8 0%,#c9e1ef 42%,#efe7d8 100%)}
+body.tpl-market #sky .n{background:linear-gradient(180deg,#060a16 0%,#141a30 45%,#2b2436 80%,#3a2c30 100%)}
+body.tpl-market{background:#efe7d8}
+body.tpl-market #mtags{position:fixed;inset:0;pointer-events:none;z-index:3;transition:opacity .4s}
+body.tpl-market #mtags.off{opacity:0}
+body.tpl-market #mtags.off .mtag{pointer-events:none}
+body.tpl-market .mtag{position:absolute;left:0;top:0;transform:translate(-50%,calc(-100% - 14px));pointer-events:auto;display:flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.75);font:inherit;cursor:pointer;padding:5px 13px 5px 10px;border-radius:999px;background:var(--lb);color:var(--ink);box-shadow:var(--sh);white-space:nowrap;font-weight:700;font-size:13px;letter-spacing:.04em;transition:transform .2s,background-color .3s}
+body.tpl-market .mtag i{width:10px;height:10px;border-radius:50%;background:var(--fc);flex:none}
+body.tpl-market .mtag::after{content:"";position:absolute;left:50%;top:100%;width:1.5px;height:14px;background:var(--ink);opacity:.45}
+body.tpl-market .mtag:hover{transform:translate(-50%,calc(-100% - 18px))}
+@media(max-width:760px){body.tpl-market .mtag{font-size:11.5px;padding:3px 9px 3px 7px}
+}

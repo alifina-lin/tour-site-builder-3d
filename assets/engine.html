@@ -4964,7 +4964,2551 @@ function mergeStatic(THREE, scene, meshes, keep) {
   return n;
 }
 
-var dM = Hc[Ge.site.template] || Hc.town,
+/* ===== 共用：low poly 人群（大樓、市集用）=====
+   腿以髖、手以肩為軸前後擺（左腳向前時右手向前）；短髮／中長髮／長髮、褲裝／裙裝、包包。
+   cfg：{ scale, rnd, reduce, pal:{skin,hair,shirt,pants,bag,tights}, loops:[[Vector3...]], adjust(p,dt), hide(p,cam) } */
+function mkCrowd(T, scene, cfg) {
+  const S = cfg.scale || 1,
+    rnd = cfg.rnd,
+    reduce = cfg.reduce,
+    P = cfg.pal;
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const people = [];
+  const loops = cfg.loops || [];
+  const loopLen = loops.map((pts) => {
+    let L = 0;
+    const seg = [];
+    for (let k = 1; k < pts.length; k++) {
+      const l = pts[k].distanceTo(pts[k - 1]);
+      seg.push(l);
+      L += l;
+    }
+    return { L, seg };
+  });
+  const add = (kind, opt) => {
+    const hs = rnd(),
+      style = hs < 0.48 ? 0 : hs < 0.76 ? 1 : 2;
+    const p = Object.assign(
+      {
+        kind,
+        skin: pick(P.skin),
+        hair: pick(P.hair),
+        shirt: pick(P.shirt),
+        pants: pick(P.pants),
+        bag: rnd() < 0.4 ? pick(P.bag) : null,
+        h: 0.92 + rnd() * 0.14,
+        ph: rnd() * 10,
+        x: 0,
+        z: 0,
+        ry: 0,
+        hairStyle: style,
+        skirt: rnd() < (style ? 0.42 : 0.06),
+      },
+      opt,
+    );
+    p.legC = p.skirt ? (rnd() < 0.5 ? p.skin : pick(P.tights)) : p.pants;
+    people.push(p);
+    return p;
+  };
+  const posOn = (li, s, out) => {
+    const pts = loops[li],
+      { L, seg } = loopLen[li];
+    s = ((s % L) + L) % L;
+    for (let k = 0; k < seg.length; k++) {
+      if (s <= seg[k]) {
+        const a = pts[k],
+          b = pts[k + 1],
+          t = s / seg[k];
+        out.set(a.x + (b.x - a.x) * t, 0, a.z + (b.z - a.z) * t);
+        return Math.atan2(b.x - a.x, b.z - a.z);
+      }
+      s -= seg[k];
+    }
+    out.copy(pts[0]);
+    return 0;
+  };
+  const NAMES = ["leg", "arm", "torso", "head", "hair", "hairB", "skirt", "bag"];
+  const box = new T.BoxGeometry(1, 1, 1),
+    sph = new T.SphereGeometry(1, 8, 6),
+    cone = new T.CylinderGeometry(0.55, 1, 1, 8);
+  const GEO = { leg: box, arm: box, torso: box, head: sph, hair: sph, hairB: box, skirt: cone, bag: box };
+  let IM = null;
+  const finalize = (mat, themed) => {
+    const n = Math.max(1, people.length),
+      cnt = { leg: 2 * n, arm: 2 * n, torso: n, head: n, hair: n, hairB: n, skirt: n, bag: n };
+    IM = {};
+    const cols = {};
+    NAMES.forEach((k) => {
+      const im = new T.InstancedMesh(GEO[k], mat, cnt[k]);
+      im.frustumCulled = false;
+      im.castShadow = true;
+      im.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      scene.add(im);
+      IM[k] = im;
+      cols[k] = [];
+    });
+    people.forEach((p) => {
+      cols.leg.push(p.legC, p.legC);
+      cols.arm.push(p.shirt, p.shirt);
+      cols.torso.push(p.shirt);
+      cols.head.push(p.skin);
+      cols.hair.push(p.hair);
+      cols.hairB.push(p.hair);
+      cols.skirt.push(p.pants);
+      cols.bag.push(p.bag || p.shirt);
+    });
+    NAMES.forEach((k) => {
+      if (!cols[k].length) return;
+      cols[k].forEach((c, q) => IM[k].setColorAt(q, c.d));
+      IM[k].instanceColor.needsUpdate = true;
+      themed.push({ im: IM[k], cols: cols[k] });
+    });
+  };
+  const e = new T.Euler(),
+    qn = new T.Quaternion(),
+    sv = new T.Vector3(),
+    pv = new T.Vector3(),
+    m4 = new T.Matrix4(),
+    tmp = new T.Vector3();
+  const put = (k, i, x, y, z, sx, sy, sz, ry, rx = 0) => {
+    pv.set(x, y, z);
+    e.set(rx, ry, 0, "YXZ");
+    qn.setFromEuler(e);
+    sv.set(sx, sy, sz);
+    m4.compose(pv, qn, sv);
+    IM[k].setMatrixAt(i, m4);
+  };
+  const off = (k, i, x, z) => put(k, i, x, -9, z, 1e-3, 1e-3, 1e-3, 0);
+  const draw = (t, dt, cam) => {
+    if (!IM) return;
+    people.forEach((p, q) => {
+      let swing = 0;
+      if (p.kind === "walk") {
+        if (!reduce) p.s += p.v * dt;
+        const ry = posOn(p.loop, p.s, tmp) + (p.v < 0 ? Math.PI : 0);
+        // 走在路線右側，雙向人流不相撞
+        p.x = tmp.x + Math.cos(ry) * p.off;
+        p.z = tmp.z - Math.sin(ry) * p.off;
+        p.ry = ry;
+        swing = reduce ? 0 : Math.sin((t * 7 * Math.abs(p.v)) / S + p.ph) * 0.5;
+      } else if (!reduce && p.kind !== "still") {
+        p.ry0 === undefined && (p.ry0 = p.ry);
+        p.ry = p.ry0 + Math.sin(t * 0.4 + p.ph) * 0.25;
+      }
+      cfg.adjust && cfg.adjust(p, dt);
+      if (cfg.hide && cfg.hide(p, cam)) {
+        for (const k of ["leg", "arm"]) for (const j of [0, 1]) off(k, q * 2 + j, p.x, p.z);
+        for (const k of ["torso", "head", "hair", "hairB", "skirt", "bag"]) off(k, q, p.x, p.z);
+        return;
+      }
+      const h = p.h * S,
+        c = Math.cos(p.ry),
+        s = Math.sin(p.ry),
+        bob = Math.abs(swing) * 0.04 * S,
+        y0 = p.y || 0;
+      const hy = 0.82 * h,
+        la = 0.6 * h,
+        sh = 1.44 * h + bob + y0;
+      for (const side of [-1, 1]) {
+        const idx = q * 2 + (side > 0 ? 1 : 0),
+          a = swing * side,
+          zz = -(hy / 2) * Math.sin(a);
+        const lx = p.x + c * side * 0.11 * S,
+          lz = p.z - s * side * 0.11 * S;
+        put("leg", idx, lx + zz * s, y0 + hy + bob - (hy / 2) * Math.cos(a), lz + zz * c, (p.skirt ? 0.12 : 0.16) * S, hy, (p.skirt ? 0.13 : 0.18) * S, p.ry, a);
+        const b = -a * 0.8,
+          za = -(la / 2) * Math.sin(b),
+          ax = p.x + c * side * 0.29 * S,
+          az = p.z - s * side * 0.29 * S;
+        put("arm", idx, ax + za * s, sh - (la / 2) * Math.cos(b), az + za * c, 0.12 * S, la, 0.13 * S, p.ry, b);
+      }
+      put("torso", q, p.x, y0 + 0.82 * h + 0.33 * h + bob, p.z, 0.44 * S, 0.66 * h, 0.26 * S, p.ry);
+      put("head", q, p.x, y0 + 1.62 * h + bob, p.z, 0.17 * S, 0.2 * S, 0.17 * S, p.ry);
+      put("hair", q, p.x - s * 0.02 * S, y0 + 1.7 * h + bob, p.z - c * 0.02 * S, 0.18 * S, 0.13 * S, 0.18 * S, p.ry);
+      if (p.hairStyle) {
+        // 中長髮到下巴、長髮到背中間
+        const L = p.hairStyle === 2 ? 0.55 : 0.3;
+        put("hairB", q, p.x - s * 0.1 * S, y0 + 1.72 * h - (L * h) / 2 + bob, p.z - c * 0.1 * S, 0.36 * S, L * h, 0.13 * S, p.ry);
+      } else off("hairB", q, p.x, p.z);
+      if (p.skirt) put("skirt", q, p.x, y0 + 0.62 * h + bob, p.z, 0.27 * S, 0.42 * h, 0.24 * S, p.ry);
+      else off("skirt", q, p.x, p.z);
+      if (p.bag) put("bag", q, p.x - s * 0.2 * S, y0 + 1.15 * h + bob, p.z - c * 0.2 * S, 0.34 * S, 0.4 * S, 0.16 * S, p.ry);
+      else off("bag", q, p.x, p.z);
+    });
+    NAMES.forEach((k) => (IM[k].instanceMatrix.needsUpdate = true));
+  };
+  return { people, add, finalize, draw, loops, loopLen };
+}
+
+/* ===== 版型：科技大樓 v2（玻璃帷幕大樓；一層樓一個分類，一間房一個細項；零件全部用「蓋章」InstancedMesh 畫）===== */
+Hc.tower = {
+  name: "大樓",
+  build({ THREE: T, scene, data, colorOf }) {
+    const cats = data.categories,
+      N = Math.max(1, cats.length),
+      FH = 5.0, // 樓高
+      W = 40, // 樓面寬（x）
+      D = 26, // 樓面深（z）
+      SL = 0.5, // 樓板厚
+      WH = 3.0, // 隔間牆高（剖面高度）
+      MAXI = 6;
+    const HT = N * FH;
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const V3 = (x, y, z) => new T.Vector3(x, y, z);
+    const C = (h) => new T.Color(h);
+    const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647), (seed - 1) / 2147483646);
+    const neon = (hex, l, s = 0.8) => {
+      const o = {};
+      C(hex).getHSL(o);
+      return new T.Color().setHSL(o.h, s, l);
+    };
+
+    /* ---------- 色票：每個顏色都有白天、夜晚兩個值 ---------- */
+    const PAL = new Map();
+    const pal = (d, n = d) => {
+      const k = d + "|" + n;
+      if (!PAL.has(k)) PAL.set(k, { d: C(d), n: C(n), same: d === n });
+      return PAL.get(k);
+    };
+    const palC = (d, n) => ({ d, n, same: false });
+    const K = {
+      white: pal("#ffffff", "#8a97ac"),
+      fascia: pal("#ffffff", "#a3afc2"),
+      mull: pal("#e9edf0", "#5c6b83"),
+      wall: pal("#fbfaf7", "#4b576f"),
+      wallWood: pal("#f1e6d6", "#5a5048"),
+      wallCool: pal("#eef3f6", "#41536e"),
+      frost: pal("#e2eef5", "#3b5f86"),
+      desk: pal("#f7f7f5", "#5d6c88"),
+      wood: pal("#c99f6e", "#5b4636"),
+      woodL: pal("#dcc19a", "#625342"),
+      dark: pal("#333b45", "#121a29"),
+      metal: pal("#a9b4bd", "#46546a"),
+      paper: pal("#ffffff", "#9aa8c0"),
+      sofa: pal("#8a9aab", "#2c3d58"),
+      sofa2: pal("#c8b39b", "#5b3d33"),
+      plant: pal("#4f9a5c", "#25503a"),
+      plant2: pal("#6cb36a", "#2d5b3c"),
+      pot: pal("#dcd6cc", "#4b4f5c"),
+      trunk: pal("#8a6a4c", "#3a2e26"),
+      paving: pal("#ffffff", "#2a3346"),
+      lawn: pal("#a5cf8f", "#1f3a2a"),
+      road: pal("#ffffff", "#2a3346"),
+      slab: pal("#f4f2ee", "#2a3549"),
+      tileGray: pal("#e9e6df", "#2d384c"),
+      tileRack: pal("#d3d8dd", "#1d2738"),
+      tileWood: pal("#dcc29e", "#4a3d31"),
+      tileWarm: pal("#efe5d3", "#3d3a3c"),
+      tileBlue: pal("#d6dee6", "#26344c"),
+      tileMint: pal("#dbe4da", "#24392f"),
+      light: pal("#ffffff", "#fff1d2"),
+      led1: pal("#37ff9a"),
+      led2: pal("#35d5ff"),
+      led3: pal("#ffb23a"),
+      lamp: pal("#fff6dd", "#ffe2a0"),
+      red: pal("#ff5577"),
+      skin: ["#f1c9a5", "#e0b08a", "#c99772", "#f5d6b8"].map((h) => pal(h, "#" + C(h).multiplyScalar(0.5).getHexString())),
+      hairC: ["#2b2622", "#3e2f25", "#151515", "#5a4332"].map((h) => pal(h, "#" + C(h).multiplyScalar(0.6).getHexString())),
+      shirtC: ["#ffffff", "#e9e4d8", "#9fb3c4", "#c9a98a", "#7d8f7a", "#3f4a57", "#d8c3a5", "#2f3b48", "#c7b6c9"].map((h) => pal(h, "#" + C(h).multiplyScalar(0.45).getHexString())),
+      pantsC: ["#2f3a4a", "#4a4f55", "#8a7d6b", "#3b4636", "#5a5f66"].map((h) => pal(h, "#" + C(h).multiplyScalar(0.5).getHexString())),
+      binders: ["#c9a48e", "#8fa6bd", "#a9bfae", "#e1d2b2", "#a9a2bd"].map((h) => pal(h, "#" + C(h).multiplyScalar(0.45).getHexString())),
+    };
+
+    /* ---------- 蓋章：同形狀、同材質的零件合成一個 InstancedMesh ---------- */
+    const UNIT = {
+      box: new T.BoxGeometry(1, 1, 1),
+      cyl: new T.CylinderGeometry(1, 1, 1, 12),
+      cone: new T.CylinderGeometry(0.62, 1, 1, 10),
+      ball: new T.IcosahedronGeometry(1, 0),
+      sph: new T.SphereGeometry(1, 10, 8),
+    };
+    const MAT = {
+      lit: new T.MeshLambertMaterial({ color: 0xffffff, flatShading: true }),
+      glow: new T.MeshBasicMaterial({ color: 0xffffff }),
+    };
+    const themed = []; // 需要隨日夜變色的 InstancedMesh
+    const mkStamp = () => {
+      const B = new Map();
+      return {
+        B,
+        put(shape, lit, col, x, y, z, sx, sy, sz, ry = 0, rz = 0) {
+          const key = shape + (lit ? "L" : "G");
+          B.has(key) || B.set(key, { shape, lit, items: [] });
+          B.get(key).items.push({ x, y, z, sx, sy, sz, ry, rz, col });
+        },
+      };
+    };
+    const dummy = new T.Object3D();
+    const realize = (S, parent) => {
+      const out = [];
+      S.B.forEach((b) => {
+        if (!b.items.length) return;
+        const im = new T.InstancedMesh(UNIT[b.shape], b.lit ? MAT.lit : MAT.glow, b.items.length);
+        im.frustumCulled = false;
+        b.items.forEach((it, k) => {
+          dummy.position.set(it.x, it.y, it.z);
+          dummy.rotation.set(0, it.ry, it.rz);
+          dummy.scale.set(it.sx, it.sy, it.sz);
+          dummy.updateMatrix();
+          im.setMatrixAt(k, dummy.matrix);
+          im.setColorAt(k, it.col.d);
+        });
+        im.instanceMatrix.needsUpdate = true;
+        im.instanceColor.needsUpdate = true;
+        im.castShadow = im.receiveShadow = b.lit;
+        parent.add(im);
+        const rec = { im, cols: b.items.map((it) => it.col) };
+        b.items.some((it) => !it.col.same) && themed.push(rec);
+        out.push(rec);
+      });
+      return out;
+    };
+    /* 以某點為原點、轉 ry 的區域座標蓋章（y 為零件中心高）*/
+    // sc：零件放大倍數（尺寸與高度）；ps：位置間距倍數
+    const frame = (S, ox, oy, oz, ry = 0, sc = 1, ps = sc) => {
+      const c = Math.cos(ry),
+        s = Math.sin(ry);
+      const P = (x, z) => [ox + (x * c + z * s) * ps, oz + (-x * s + z * c) * ps];
+      return {
+        _ox: ox, _oy: oy, _oz: oz, _ry: ry, _sc: sc, _ps: ps,
+        box(x, y, z, w, h, d, col, lit = true, r2 = 0) {
+          const [X, Z] = P(x, z);
+          S.put("box", lit, col, X, oy + y * sc, Z, w * sc, h * sc, d * sc, ry + r2);
+        },
+        cyl(x, y, z, r, h, col, lit = true) {
+          const [X, Z] = P(x, z);
+          S.put("cyl", lit, col, X, oy + y * sc, Z, r * sc, h * sc, r * sc);
+        },
+        cone(x, y, z, r, h, col) {
+          const [X, Z] = P(x, z);
+          S.put("cone", true, col, X, oy + y * sc, Z, r * sc, h * sc, r * sc);
+        },
+        ball(x, y, z, r, col, sy = 1) {
+          const [X, Z] = P(x, z);
+          S.put("ball", true, col, X, oy + y * sc, Z, r * sc, r * sy * sc, r * sc, rnd() * 3);
+        },
+        sph(x, y, z, r, col, lit = false) {
+          const [X, Z] = P(x, z);
+          S.put("sph", lit, col, X, oy + y * sc, Z, r * sc, r * sc, r * sc);
+        },
+      };
+    };
+
+    /* ---------- 光線、霧、地面、天際線 ---------- */
+    const hemi = new T.HemisphereLight(0xffffff, 0xe3e8ec, 1.2);
+    const sun = new T.DirectionalLight(0xfff6ea, 1.25);
+    sun.position.set(-30, 64, 44);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    Object.assign(sun.shadow.camera, { left: -52, right: 52, top: 52, bottom: -52, near: 10, far: 200 });
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 0.03;
+    const amb = new T.AmbientLight(0xfff1dc, 0); // 夜晚進到樓層時，室內燈打開
+    scene.add(hemi, sun, amb);
+    const fog = new T.Fog(0xeef6fb, 260, 560);
+    scene.fog = fog;
+    const L = {
+      hemiSky: [C("#ffffff"), C("#4a6ea8")],
+      hemiGnd: [C("#e3e8ec"), C("#0b1426")],
+      hemiI: [1.2, 0.95],
+      sunC: [C("#fff6ea"), C("#8fb8ff")],
+      sunI: [1.25, 0.45],
+      fog: [C("#eef6fb"), C("#0a1428")],
+      fogN: [260, 140],
+      fogF: [560, 380],
+    };
+    const groundMat = new T.MeshLambertMaterial({ color: "#060c18", transparent: true, opacity: 0 });
+    const ground = new T.Mesh(new T.CircleGeometry(420, 48), groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.32;
+    scene.add(ground);
+    const gridPts = [];
+    for (let k = -200; k <= 200; k += 8) gridPts.push(-200, -0.3, k, 200, -0.3, k, k, -0.3, -200, k, -0.3, 200);
+    const gridGeo = new T.BufferGeometry();
+    gridGeo.setAttribute("position", new T.Float32BufferAttribute(gridPts, 3));
+    const gridMat = new T.LineBasicMaterial({ color: "#cfdae2", transparent: true, opacity: 0.6 });
+    scene.add(new T.LineSegments(gridGeo, gridMat));
+    // 天際線：遠處剪影，一個 InstancedMesh；夜晚亮窗
+    const winC = document.createElement("canvas");
+    winC.width = 64;
+    winC.height = 128;
+    {
+      const g = winC.getContext("2d");
+      g.fillStyle = "#000";
+      g.fillRect(0, 0, 64, 128);
+      for (let r = 0; r < 16; r++)
+        for (let c = 0; c < 8; c++)
+          if (rnd() > 0.55) {
+            g.fillStyle = rnd() > 0.5 ? "#ffd9a0" : "#9fdcff";
+            g.fillRect(c * 8 + 1, r * 8 + 2, 5, 4);
+          }
+    }
+    const skyMat = new T.MeshLambertMaterial({ color: "#0c1930", emissive: "#ffffff", emissiveMap: new T.CanvasTexture(winC), flatShading: true });
+    const SKN = 44;
+    const skyIM = new T.InstancedMesh(UNIT.box, skyMat, SKN);
+    skyIM.frustumCulled = false;
+    for (let k = 0; k < SKN; k++) {
+      const a = (k / SKN) * Math.PI * 2 + rnd() * 0.1,
+        r = 170 + rnd() * 90,
+        w = 10 + rnd() * 14,
+        h = 16 + rnd() * 50;
+      dummy.position.set(Math.cos(a) * r, h / 2 - 0.3, Math.sin(a) * r);
+      dummy.rotation.set(0, rnd() * 3, 0);
+      dummy.scale.set(w, h, w * (0.7 + rnd() * 0.5));
+      dummy.updateMatrix();
+      skyIM.setMatrixAt(k, dummy.matrix);
+    }
+    scene.add(skyIM);
+
+    /* ---------- 廣場鋪面：磁磚線條＋紅磚人行道（貼圖）---------- */
+    const mkTex = (draw, size = 256) => {
+      const c = document.createElement("canvas");
+      c.width = c.height = size;
+      draw(c.getContext("2d"), size);
+      const t = new T.CanvasTexture(c);
+      t.wrapS = t.wrapT = T.RepeatWrapping;
+      t.anisotropy = 4;
+      return t;
+    };
+    const tileTex = mkTex((g, n) => {
+      g.fillStyle = "#f1eee9";
+      g.fillRect(0, 0, n, n);
+      for (let r = 0; r < 4; r++)
+        for (let c = 0; c < 4; c++) {
+          g.fillStyle = ["#f3f0eb", "#eeebe5", "#f5f3ee", "#ece8e2"][(r * 3 + c * 5) % 4];
+          g.fillRect(c * 64 + 2, r * 64 + 2, 60, 60);
+        }
+      g.fillStyle = "#d9d3ca";
+      for (let k = 0; k <= 4; k++) {
+        g.fillRect(k * 64 - 1, 0, 2, n);
+        g.fillRect(0, k * 64 - 1, n, 2);
+      }
+    });
+    const brickTex = mkTex((g, n) => {
+      g.fillStyle = "#e3d8cf";
+      g.fillRect(0, 0, n, n);
+      const bh = 32,
+        bw = 64;
+      for (let r = 0; r < n / bh; r++)
+        for (let c = -1; c < n / bw + 1; c++) {
+          const x = c * bw + (r % 2 ? bw / 2 : 0);
+          g.fillStyle = ["#b97a63", "#b3725c", "#bf846c", "#ad6e5a"][(r * 7 + c * 3 + 8) % 4];
+          g.fillRect(x + 2, r * bh + 2, bw - 4, bh - 4);
+        }
+    });
+    const plazaMats = [];
+    const slabTex = (tex, w, d, x, y, z, rep, h = 0.06) => {
+      const t = tex.clone();
+      t.needsUpdate = true;
+      t.repeat.set(w / rep, d / rep);
+      const m = new T.MeshLambertMaterial({ color: "#ffffff", map: t });
+      plazaMats.push(m);
+      const mesh = new T.Mesh(new T.BoxGeometry(w, h, d), m);
+      mesh.position.set(x, y, z);
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      return mesh;
+    };
+    const PW = W + 30,
+      PD = D + 30,
+      PZ = 2;
+    slabTex(tileTex, PW, PD, 0, -0.6, PZ, 4, 1.2); // 廣場基座（看得到側邊厚度）
+    slabTex(brickTex, PW, 5, 0, 0.03, PZ + PD / 2 - 2.5, 1.6); // 前方紅磚人行道
+    slabTex(brickTex, 3.2, PD - 5, -PW / 2 + 1.6, 0.03, PZ - 2.5, 1.6); // 兩側紅磚道
+    slabTex(brickTex, 3.2, PD - 5, PW / 2 - 1.6, 0.03, PZ - 2.5, 1.6);
+    slabTex(brickTex, 7, PZ + PD / 2 - 5 - (D / 2 + 0.6), 4, 0.03, (D / 2 + 0.6 + PZ + PD / 2 - 5) / 2, 1.6); // 入口步道
+
+    /* ---------- 玻璃的天空反射（簡易環境貼圖）---------- */
+    const envFace = (top, bot) => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 64;
+      const g = c.getContext("2d"),
+        gr = g.createLinearGradient(0, 0, 0, 64);
+      gr.addColorStop(0, top);
+      gr.addColorStop(1, bot);
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 64, 64);
+      return c;
+    };
+    const side = envFace("#9fcfee", "#eef6fb");
+    const envMap = new T.CubeTexture([side, side, envFace("#8cc4ea", "#8cc4ea"), envFace("#e7eaec", "#e7eaec"), side, side]);
+    envMap.needsUpdate = true;
+    const envSet = (m) =>
+      floors.forEach((f) => {
+        f.gm.reflectivity = 0.55 - 0.4 * m;
+      });
+
+    /* ---------- 廣場、樹、外梯 ---------- */
+    const site = mkStamp();
+    {
+      const F = frame(site, 0, 0, 0);
+
+      // 草地
+      [[-W / 2 - 8, -2, 8, D + 14], [W / 2 + 8, -2, 8, D + 14], [-W / 2 + 8, D / 2 + 8.2, 12, 4], [W / 2 - 10, D / 2 + 8.2, 14, 4]].forEach(([x, z, w, d]) =>
+        F.box(x, 0.05, z, w, 0.12, d, K.lawn),
+      );
+      // 樹（低面數）
+      const tree = (x, z, s = 1) => {
+        F.cyl(x, 0.9 * s, z, 0.18 * s, 1.8 * s, K.trunk);
+        F.ball(x, 2.5 * s, z, 1.35 * s, K.plant, 1.1);
+        F.ball(x + 0.6 * s, 3.3 * s, z - 0.3 * s, 0.95 * s, K.plant2);
+        F.ball(x - 0.5 * s, 3.1 * s, z + 0.4 * s, 0.85 * s, K.plant);
+      };
+      for (let k = 0; k < 5; k++) tree(-W / 2 - 8, -D / 2 + 2 + k * 6.2, 0.95 + (k % 2) * 0.2);
+      for (let k = 0; k < 5; k++) tree(W / 2 + 8, -D / 2 + 3 + k * 6.2, 1.05 - (k % 2) * 0.15);
+      [-W / 2 + 4, -W / 2 + 12, W / 2 - 16, W / 2 - 6].forEach((x, k) => tree(x, D / 2 + 8.2, 0.9 + (k % 2) * 0.2));
+      // 路燈、長椅
+      for (let k = 0; k < 5; k++) {
+        const x = -W / 2 + 2 + k * 9.5;
+        F.cyl(x, 1.8, D / 2 + 11.4, 0.08, 3.6, K.metal);
+        F.box(x, 3.65, D / 2 + 11.4, 0.5, 0.14, 0.5, K.lamp, false);
+      }
+      [-6, 6].forEach((x) => {
+        F.box(x, 0.45, D / 2 + 10.2, 2.4, 0.12, 0.6, K.wood);
+        F.box(x - 1.0, 0.22, D / 2 + 10.2, 0.12, 0.44, 0.5, K.metal);
+        F.box(x + 1.0, 0.22, D / 2 + 10.2, 0.12, 0.44, 0.5, K.metal);
+      });
+    }
+    realize(site, scene);
+    const tall = mkStamp();
+    {
+      const F = frame(tall, 0, 0, 0);
+      // 入口雨遮
+      F.box(4, 3.6, D / 2 + 2.2, 9, 0.3, 4.2, K.white);
+      F.box(0.2, 1.8, D / 2 + 4, 0.25, 3.6, 0.25, K.metal);
+      F.box(7.8, 1.8, D / 2 + 4, 0.25, 3.6, 0.25, K.metal);
+      // 外梯：從廣場上到 2F 陽台
+      if (N >= 2) {
+        const ns = 14,
+          run = 0.9,
+          x0 = -W / 2 + 10.4;
+        for (let k = 0; k < ns; k++) {
+          const top = FH - k * (FH / ns);
+          F.box(x0 + (k + 0.5) * run, top / 2, D / 2 + 2.5, run, top, 2.2, K.white);
+        }
+        const len = Math.hypot(ns * run, FH),
+          ang = Math.atan2(FH, ns * run);
+        [1.45, 3.55].forEach((dz) => {
+          tall.put("box", true, K.metal, x0 + (ns * run) / 2, FH / 2 + 1.0, D / 2 + dz, len, 0.07, 0.07, 0, -ang);
+        });
+      }
+    }
+    const tallG = new T.Group();
+    scene.add(tallG);
+    realize(tall, tallG);
+
+    /* ---------- 房間設備組（區域座標：x 橫向、z 往門的方向為正）---------- */
+    const chair = (F, x, z, ry, A) => {
+      const c = Math.cos(ry),
+        s = Math.sin(ry);
+      F.box(x, 0.46, z, 0.55, 0.08, 0.55, A.acc, true, ry);
+      F.box(x - s * 0.26, 0.76, z - c * 0.26, 0.55, 0.5, 0.07, A.acc, true, ry);
+      F.cyl(x, 0.22, z, 0.05, 0.44, K.metal);
+      // 有人坐的椅子（比例依房間種類）
+      if (rnd() < (A.occ == null ? 0.6 : A.occ)) seated(F, x, z, ry, A.typing !== false);
+    };
+    const pickP = (a) => a[Math.floor(rnd() * a.length)];
+    const person = () => ({ skin: pickP(K.skin), hair: pickP(K.hairC), shirt: pickP(K.shirtC), pants: pickP(K.pantsC), long: rnd() < 0.35 });
+    // 坐在椅子上、面向 (sin ry, cos ry)；手放在前方桌面
+    const seated = (F, x, z, ry, typing = true) => {
+      const c = Math.cos(ry),
+        s = Math.sin(ry),
+        P = person();
+      F.box(x + s * 0.12, 0.56, z + c * 0.12, 0.38, 0.13, 0.42, P.pants, true, ry);
+      F.box(x + s * 0.33, 0.27, z + c * 0.33, 0.3, 0.48, 0.14, P.pants, true, ry);
+      F.box(x - s * 0.06, 0.9, z - c * 0.06, 0.4, 0.56, 0.22, P.shirt, true, ry);
+      if (typing) F.box(x + s * 0.2, 0.84, z + c * 0.2, 0.46, 0.09, 0.3, P.shirt, true, ry);
+      else for (const sd of [-1, 1]) F.box(x - s * 0.04 + c * sd * 0.24, 0.82, z - c * 0.04 - s * sd * 0.24, 0.1, 0.42, 0.12, P.shirt, true, ry);
+      F.sph(x - s * 0.05, 1.34, z - c * 0.05, 0.14, P.skin, true);
+      F.sph(x - s * 0.07, 1.4, z - c * 0.07, 0.15, P.hair, true);
+      if (P.long) F.box(x - s * 0.15, 1.2, z - c * 0.15, 0.28, 0.32, 0.08, P.hair, true, ry);
+    };
+    const standing = (F, x, z, ry) => {
+      const c = Math.cos(ry),
+        s = Math.sin(ry),
+        P = person();
+      for (const sd of [-1, 1]) {
+        F.box(x + c * sd * 0.1, 0.42, z - s * sd * 0.1, 0.15, 0.84, 0.17, P.pants, true, ry);
+        F.box(x + c * sd * 0.28, 1.12, z - s * sd * 0.28, 0.11, 0.58, 0.12, P.shirt, true, ry);
+      }
+      F.box(x, 1.15, z, 0.42, 0.64, 0.24, P.shirt, true, ry);
+      F.sph(x, 1.64, z, 0.15, P.skin, true);
+      F.sph(x - s * 0.02, 1.7, z - c * 0.02, 0.16, P.hair, true);
+      if (P.long) F.box(x - s * 0.1, 1.48, z - c * 0.1, 0.3, 0.4, 0.08, P.hair, true, ry);
+    };
+    const plant = (F, x, z, s = 1) => {
+      F.cone(x, 0.3 * s, z, 0.32 * s, 0.6 * s, K.pot);
+      F.ball(x, 0.95 * s, z, 0.5 * s, K.plant);
+      F.ball(x + 0.15 * s, 1.35 * s, z - 0.1 * s, 0.34 * s, K.plant2);
+    };
+    const screen = (F, x, y, z, w, h, ry, A) => {
+      F.box(x, y, z, w, h, 0.08, K.dark, true, ry);
+      const c = Math.cos(ry),
+        s = Math.sin(ry);
+      F.box(x + s * 0.05, y, z + c * 0.05, w - 0.12, h - 0.12, 0.02, A.scr, false, ry);
+    };
+    const ROOM = {
+      desk(F, w, d, A) {
+        const nC = Math.max(1, Math.floor((w - 1.5) / 4.6)),
+          rows = d > 8 ? [-2.3, 1.7] : [-0.4];
+        for (const rz of rows)
+          for (let c = 0; c < nC; c++) {
+            const cx = -w / 2 + (w / nC) * (c + 0.5);
+            F.box(cx, 0.98, rz, 3.3, 0.4, 0.05, A.acc);
+            for (const sx of [-0.85, 0.85])
+              for (const sz of [-1, 1]) {
+                const x = cx + sx,
+                  z = rz + sz * 0.45;
+                F.box(x, 0.75, z, 1.6, 0.06, 0.8, K.desk);
+                F.box(x, 0.37, z + sz * 0.3, 1.5, 0.7, 0.05, K.metal);
+                F.box(x, 1.05, z - sz * 0.18, 0.7, 0.42, 0.04, K.dark);
+                F.box(x, 1.05, z - sz * 0.15, 0.62, 0.34, 0.02, A.scr, false);
+                chair(F, x, z + sz * 0.85, sz > 0 ? Math.PI : 0, A);
+              }
+          }
+        F.box(w / 2 - 0.35, 0.9, -d / 2 + 1.8, 0.5, 1.8, 2.4, K.wood);
+        for (let k = 0; k < 3; k++) F.box(w / 2 - 0.42, 0.45 + k * 0.55, -d / 2 + 1.8, 0.36, 0.3, 2.1, K.binders[k]);
+        plant(F, -w / 2 + 0.7, -d / 2 + 0.7, 1.1);
+      },
+      rack(F, w, d, A) {
+        const n = Math.max(2, Math.min(9, Math.floor((w - 3) / 1.2))),
+          xs = -((n - 1) * 1.2) / 2 + 0.8;
+        for (const [rz, face] of [[-1.7, 1], [1.4, -1]])
+          for (let k = 0; k < n; k++) {
+            const x = xs + k * 1.2;
+            F.box(x, 1.15, rz, 1.05, 2.3, 1.1, K.dark);
+            for (let r = 0; r < 3; r++) F.box(x - 0.12, 0.7 + r * 0.55, rz + face * 0.56, 0.6, 0.05, 0.02, A.scr, false);
+            for (let r = 0; r < 3; r++) leds.put("box", false, [K.led1, K.led2, K.led3][(k + r) % 3], ...lp(F, x + 0.32, 0.7 + r * 0.55, rz + face * 0.57), 0.08 * F._sc, 0.08 * F._sc, 0.02 * F._sc);
+          }
+        F.box(-w / 2 + 0.9, 1.1, -0.2, 1.2, 2.2, 2.8, K.white);
+        F.box(-w / 2 + 1.52, 1.5, -0.2, 0.02, 0.5, 1.6, A.scr, false);
+        F.box(0, 2.45, -0.15, w - 2, 0.08, 0.5, K.metal);
+      },
+      meeting(F, w, d, A) {
+        const Lt = Math.max(3, Math.min(w - 4.2, 9));
+        F.box(0, 0.76, -0.3, Lt, 0.08, 2.0, K.woodL);
+        F.box(-Lt * 0.32, 0.37, -0.3, 0.3, 0.72, 1.3, K.metal);
+        F.box(Lt * 0.32, 0.37, -0.3, 0.3, 0.72, 1.3, K.metal);
+        const nc = Math.floor(Lt / 1.1);
+        for (let k = 0; k < nc; k++) {
+          const x = -Lt / 2 + (Lt / nc) * (k + 0.5);
+          chair(F, x, -1.75, 0, A);
+          chair(F, x, 1.15, Math.PI, A);
+        }
+        screen(F, -w / 2 + 0.2, 1.55, -0.3, 2.8, 1.4, Math.PI / 2, A);
+        F.box(w / 2 - 0.12, 1.45, -0.3, 0.05, 1.1, 2.4, K.paper);
+        F.box(0, 0.36, -d / 2 + 0.5, Math.min(Lt, 5), 0.72, 0.5, K.wood);
+        plant(F, w / 2 - 0.7, -d / 2 + 0.7, 1.2);
+        plant(F, -w / 2 + 0.7, d / 2 - 0.8, 1.0);
+      },
+      counter(F, w, d, A) {
+        const cl = Math.min(6, w - 3),
+          cz = d / 2 - 2.0;
+        F.box(0, 0.53, cz, cl, 1.05, 0.8, K.white);
+        F.box(0, 1.08, cz, cl + 0.1, 0.06, 1.0, K.dark);
+        F.box(0, 0.65, cz + 0.41, cl - 0.2, 0.1, 0.02, A.scr, false);
+        F.box(cl / 2 - 0.4, 0.53, cz - 1.2, 0.8, 1.05, 1.8, K.white);
+        for (const x of [-1.2, 1.0]) {
+          F.box(x, 1.32, cz - 0.15, 0.6, 0.38, 0.04, K.dark);
+          F.box(x, 1.32, cz - 0.12, 0.52, 0.3, 0.02, A.scr, false);
+          chair(F, x, cz - 0.9, 0, A);
+        }
+        // 等候區
+        const sz = -d / 2 + 2.2;
+        for (const [z, ry] of [[sz - 0.9, 0], [sz + 1.5, Math.PI]]) {
+          F.box(0, 0.25, z, 3.0, 0.45, 0.9, K.sofa, true);
+          F.box(0, 0.62, z + (ry ? 0.38 : -0.38), 3.0, 0.5, 0.2, K.sofa, true);
+        }
+        F.box(0, 0.22, sz + 0.3, 1.4, 0.06, 0.7, K.woodL);
+        F.box(0, 0.02, sz + 0.3, 4.4, 0.03, 3.4, A.rug);
+        plant(F, -w / 2 + 0.7, -d / 2 + 0.7, 1.3);
+        plant(F, w / 2 - 0.7, -d / 2 + 0.7, 1.1);
+        F.box(-w / 2 + 1.2, 0.75, cz, 0.6, 1.5, 0.4, K.dark);
+        F.box(-w / 2 + 1.2, 1.0, cz + 0.21, 0.5, 0.8, 0.02, A.scr, false);
+      },
+      printer(F, w, d, A) {
+        const nU = Math.max(1, Math.floor((d - 1.5) / 2.2));
+        for (let u = 0; u < nU; u++) {
+          const z = -d / 2 + 1.4 + u * 2.2;
+          F.box(-w / 2 + 0.4, 1.0, z, 0.6, 2.0, 2.0, K.wood);
+          for (let r = 0; r < 3; r++) for (let b = 0; b < 4; b++) F.box(-w / 2 + 0.45, 0.4 + r * 0.6, z - 0.75 + b * 0.5, 0.42, 0.42, 0.36, K.binders[(u + r + b) % 5]);
+        }
+        for (const z of [-1.8, 0.6]) {
+          F.box(w / 2 - 0.8, 0.55, z, 0.9, 1.1, 1.3, K.white);
+          F.box(w / 2 - 0.8, 1.15, z, 0.9, 0.12, 1.3, K.dark);
+          F.box(w / 2 - 1.27, 0.95, z + 0.3, 0.02, 0.25, 0.4, A.scr, false);
+          F.box(w / 2 - 1.4, 0.75, z - 0.2, 0.4, 0.04, 0.7, K.paper);
+        }
+        F.box(0, 0.88, -0.5, 2.6, 0.06, 1.3, K.desk);
+        F.box(0, 0.43, -0.5, 2.4, 0.84, 0.1, K.metal);
+        for (let k = 0; k < 3; k++) F.box(-0.8 + k * 0.7, 0.98 + (k % 2) * 0.05, -0.5, 0.42, 0.14 + (k % 2) * 0.1, 0.6, K.paper);
+        for (let k = 0; k < 3; k++) F.box(0.8 + k * 0.6, 0.2, d / 2 - 1.2, 0.5, 0.4, 0.4, K.woodL);
+        plant(F, -w / 2 + 0.8, d / 2 - 0.9, 1.0);
+      },
+      board(F, w, d, A) {
+        const sl = Math.min(d - 2, 6.5);
+        F.box(-w / 2 + 0.2, 1.75, -0.4, 0.1, 2.3, sl, K.dark);
+        F.box(-w / 2 + 0.27, 1.75, -0.4, 0.02, 2.1, sl - 0.2, A.scrDim, false);
+        for (let k = 0; k < 6; k++) {
+          const h = 0.5 + ((k * 37) % 10) * 0.13;
+          F.box(-w / 2 + 0.3, 0.9 + h / 2, -0.4 - sl / 2 + 0.8 + k * ((sl - 1.2) / 5), 0.02, h, 0.42, A.scr, false);
+        }
+        F.box(-w / 2 + 1.6, 0.5, -0.4, 0.8, 1.0, 0.6, K.woodL);
+        const rows = Math.max(1, Math.min(5, Math.floor((w - 4.5) / 2.1)));
+        const tl = Math.min(d - 3, 6.2),
+          nc = Math.floor(tl / 1.05);
+        for (let r = 0; r < rows; r++) {
+          const x = -w / 2 + 3.6 + r * 2.1;
+          F.box(x, 0.74, -0.4, 0.6, 0.05, tl, K.desk);
+          F.box(x, 0.36, -0.4, 0.06, 0.72, tl - 0.4, K.metal);
+          for (let k = 0; k < nc; k++) chair(F, x + 0.7, -0.4 - tl / 2 + (tl / nc) * (k + 0.5), -Math.PI / 2, A);
+        }
+        plant(F, w / 2 - 0.7, -d / 2 + 0.7, 1.2);
+      },
+    };
+    const lp = (F, x, y, z) => {
+      // 取得區域座標換算後的世界座標（給 LED 這種另外蓋章的零件用）
+      const tmp = mkStamp();
+      frame(tmp, F._ox, F._oy, F._oz, F._ry, F._sc, F._ps).box(x, y, z, 1, 1, 1, K.white);
+      const it = tmp.B.get("boxL").items[0];
+      return [it.x, it.y, it.z];
+    };
+    let leds = null;
+    const TYPE_FLOOR = { desk: "tileBlue", rack: "tileRack", meeting: "tileWood", counter: "tileWarm", printer: "tileGray", board: "tileMint" };
+    const HIT_H = 3.0,
+      FS_ = 1.45; // 家具放大倍數（參考圖 2 的比例）
+    const ORDER = ["desk", "board", "meeting", "counter", "printer", "rack"];
+    const RULES = [
+      ["rack", /網路|主機|伺服|機房|資安|防火牆|備份|雲端|儲存|安全/],
+      ["counter", /諮詢|客服|櫃台|問答|窗口|支援|報修|服務台|協助|小幫手|助理/],
+      ["printer", /列印|印表|申請|表單|文件|公文|證明|影印|簽核|文書/],
+      ["meeting", /會議|課程|教學|研習|活動|訓練|講座|視訊|培訓|研討/],
+      ["board", /數據|統計|報表|分析|儀表|看板|成效|指標|資料/],
+      ["desk", /系統|平台|網站|帳號|信箱|軟體|應用|登入|入口|電腦|行政/],
+    ];
+    const pickType = (ent, used, base) => {
+      const txt = (ent.name || "") + " " + (ent.highlight || "");
+      for (const [t, re] of RULES) if (re.test(txt) && !used.includes(t)) return t;
+      for (let k = 0; k < ORDER.length; k++) {
+        const t = ORDER[(base + k) % ORDER.length];
+        if (!used.includes(t)) return t;
+      }
+      return ORDER[base % ORDER.length];
+    };
+    /* 房間配置：3 間以內排在後排、前面是開放區；4–6 間分前後兩排，中間走廊 */
+    const X0 = -W / 2 + 1.0,
+      X1 = W / 2 - 1.0,
+      ZB0 = -D / 2 + 1.0,
+      ZB1 = -2.2,
+      ZF0 = 2.2,
+      ZF1 = D / 2 - 1.0;
+    const zonesFor = (n) => {
+      // 每間房最寬 16；房間少時置中，兩側留給走道擺設
+      const row = (k, z0, z1, front) =>
+        Array.from({ length: k }, (_, j) => {
+          const w = Math.min(k === 1 ? 22 : 99, (X1 - X0) / k),
+            s = -(w * k) / 2 + 1.5;
+          return { x0: s + j * w, x1: s + (j + 1) * w, z0, z1, front, first: j === 0 };
+        });
+      if (n <= 3) return row(Math.max(1, n), ZB0, ZB1, false);
+      const a = Math.ceil(n / 2);
+      return [...row(a, ZB0, ZB1, false), ...row(n - a, ZF0, ZF1, true)];
+    };
+    /* 開放區（3 間以內時的前半層）：每層不同 */
+    const LOUNGE = [
+      (F, A) => {
+        for (const x of [-9, 6]) {
+          F.box(x, 0.02, 0, 7, 0.03, 4.6, A.rug);
+          F.box(x, 0.25, -1.4, 3.2, 0.45, 0.95, K.sofa);
+          F.box(x, 0.62, -1.82, 3.2, 0.5, 0.2, K.sofa);
+          F.box(x - 2.9, 0.25, 0.4, 0.95, 0.45, 2.4, K.sofa2);
+          F.box(x, 0.24, 0.3, 1.6, 0.06, 0.9, K.woodL);
+        }
+        [-16, -1, 14].forEach((x) => plant(F, x, 3.2, 1.5));
+      },
+      (F, A) => {
+        F.box(14, 0.55, -1, 6, 1.1, 1.0, K.wood);
+        F.box(14, 1.12, -1, 6.2, 0.06, 1.2, K.dark);
+        F.box(14, 1.5, -2.6, 5, 1.0, 0.3, K.white);
+        for (let k = 0; k < 4; k++) {
+          const x = -14 + k * 6.5;
+          F.cyl(x, 0.74, 0.5, 0.75, 0.06, K.desk);
+          F.cyl(x, 0.37, 0.5, 0.07, 0.72, K.metal);
+          for (let j = 0; j < 3; j++) {
+            const a = (j / 3) * Math.PI * 2;
+            F.cyl(x + Math.sin(a) * 1.4, 0.25, 0.5 + Math.cos(a) * 1.4, 0.28, 0.5, A.acc);
+          }
+        }
+        plant(F, -18, 3.4, 1.4);
+        plant(F, 9, 3.4, 1.2);
+      },
+      (F, A) => {
+        for (const x of [-8, 6]) {
+          F.box(x, 0.75, 0, 8, 0.06, 1.6, K.woodL);
+          F.box(x, 0.37, 0, 7.4, 0.72, 0.1, K.metal);
+          for (let k = 0; k < 6; k++) for (const z of [-1.2, 1.2]) F.cyl(x - 3.4 + k * 1.36, 0.32, z, 0.22, 0.64, A.acc);
+        }
+        [-17, 16].forEach((x) => {
+          F.ball(x, 0.4, 0, 0.7, A.acc, 0.6);
+          F.ball(x + 1.4, 0.4, 0.8, 0.7, K.sofa2, 0.6);
+        });
+        plant(F, 0, 3.4, 1.4);
+      },
+      (F, A) => {
+        for (let k = 0; k < 4; k++) {
+          const x = -15 + k * 10;
+          F.box(x, 0.35, -0.5, 4.2, 0.7, 1.4, K.wood);
+          for (let j = 0; j < 4; j++) F.ball(x - 1.5 + j, 1.0, -0.5, 0.55, j % 2 ? K.plant : K.plant2);
+          F.box(x, 0.45, 1.8, 3, 0.1, 0.7, K.woodL);
+          F.box(x, 0.22, 1.8, 2.8, 0.44, 0.1, K.metal);
+        }
+        F.box(0, 0.02, 0, W - 6, 0.03, 6, A.rug);
+      },
+    ];
+    const WALLS = ["wall", "wallWood", "frost", "wallCool"];
+    const SCR = pal("#9fd3ea", "#8fe0ff"),
+      SCRD = pal("#3a5466", "#20384c");
+    const muted = (col) => neon(col, 0.5, 0.22);
+
+    /* 白色樓板帶：沿樓板外緣一圈（不蓋住樓面）*/
+    const band = (F, y, h) => {
+      const t = 0.45;
+      F.box(0, y, D / 2 + t / 2, W + 2 * t, h, t, K.fascia);
+      F.box(0, y, -D / 2 - t / 2, W + 2 * t, h, t, K.fascia);
+      F.box(W / 2 + t / 2, y, 0, t, h, D, K.fascia);
+      F.box(-W / 2 - t / 2, y, 0, t, h, D, K.fascia);
+    };
+    /* ---------- 蓋樓 ---------- */
+    const floors = [],
+      items = {},
+      anchors = {},
+      pickables = [],
+      IP = [],
+      isl = [];
+    const glassBase = {
+      d: C("#86afcb"),
+      n: C("#1e4268"),
+      od: 0.6,
+      on: 0.42,
+      ed: C("#000000"),
+      en: C("#0e2440"),
+    };
+    cats.forEach((cat, i) => {
+      const y0 = i * FH,
+        yF = y0 + SL; // 樓面高度
+      const col = colorOf(cat.id);
+      // 低彩度：只留一點點分類色相；螢幕統一冰藍色
+      const A = {
+        acc: palC(neon(col, 0.42, 0.14), neon(col, 0.26, 0.16)),
+        scr: SCR,
+        scrDim: SCRD,
+        rug: palC(neon(col, 0.86, 0.12), neon(col, 0.22, 0.12)),
+        carpet: palC(C("#f1eee8"), C("#2c3447")),
+      };
+      const g = new T.Group();
+      scene.add(g);
+      const core = mkStamp(),
+        skin = mkStamp(),
+        ceil = mkStamp();
+      leds = mkStamp();
+      const F = frame(core, 0, 0, 0);
+      /* 樓板、白色樓板帶、走廊地毯 */
+      F.box(0, y0 + SL / 2, 0, W, SL, D, K.slab);
+      band(F, y0 + 0.25, 0.8);
+      F.box(0, yF + 0.012, 0, W - 0.4, 0.02, D - 0.4, A.carpet);
+      /* 陽台（偶數樓層＝2F、4F…）*/
+      if (i % 2 === 1) {
+        F.box(-W / 2 + 5, y0 + 0.25, D / 2 + 1.9, 10, 0.8, 3.8, K.fascia);
+        F.box(-W / 2 + 5, yF + 1.05, D / 2 + 3.75, 10, 0.07, 0.07, K.metal);
+        F.box(-W / 2 + 0.05, yF + 1.05, D / 2 + 1.9, 0.07, 0.07, 3.8, K.metal);
+        plant(frame(core, -W / 2 + 2, yF, D / 2 + 2.6, 0, 1.3), 0, 0, 1.3);
+        plant(frame(core, -W / 2 + 8, yF, D / 2 + 2.6, 0, 1.3), 0, 0, 1.1);
+      }
+      /* 電梯梯廳（走廊左端）*/
+      const coreW = 3.4;
+      F.box(X0 + coreW / 2, yF + WH / 2, 0, coreW, WH, 4.0, K.white);
+      F.box(X0 + coreW + 0.01, yF + 1.1, -0.9, 0.02, 2.1, 1.1, K.metal);
+      F.box(X0 + coreW + 0.01, yF + 1.1, 0.9, 0.02, 2.1, 1.1, K.metal);
+      F.box(X0 + coreW + 0.02, yF + 2.35, 0, 0.02, 0.12, 0.5, A.scr, false);
+      /* 天花燈 */
+      const FC = frame(ceil, 0, 0, 0);
+      for (let x = -W / 2 + 4; x < W / 2 - 2; x += 5) for (let z = -D / 2 + 3; z < D / 2 - 2; z += 4.6) FC.box(x, y0 + FH - 0.08, z, 2.0, 0.05, 0.5, K.light, false);
+      /* 外皮：竪框、橫框、白色翼板、實牆 */
+      const FS = frame(skin, 0, 0, 0);
+      const gh = FH - SL - 0.15;
+      for (let x = -W / 2; x <= W / 2 + 0.01; x += 2.5) {
+        FS.box(x, yF + gh / 2, D / 2 - 0.05, 0.12, gh, 0.14, K.mull);
+        FS.box(x, yF + gh / 2, -D / 2 + 0.05, 0.12, gh, 0.14, K.mull);
+      }
+      for (let z = -D / 2 + 2.5; z < D / 2; z += 2.5) {
+        FS.box(W / 2 - 0.05, yF + gh / 2, z, 0.14, gh, 0.12, K.mull);
+        FS.box(-W / 2 + 0.05, yF + gh / 2, z, 0.14, gh, 0.12, K.mull);
+      }
+      FS.box(0, yF + 1.0, D / 2 - 0.05, W, 0.08, 0.12, K.mull);
+      FS.box(0, yF + 1.0, -D / 2 + 0.05, W, 0.08, 0.12, K.mull);
+      FS.box(W / 2 - 0.05, yF + 1.0, 0, 0.12, 0.08, D, K.mull);
+      FS.box(-W / 2 + 0.05, yF + 1.0, 0, 0.12, 0.08, D, K.mull);
+      if (i % 3 === 2) FS.box(-W / 2 + 13, yF + gh / 2, D / 2 + 0.08, 5, gh, 0.3, K.white);
+      if (i % 3 === 0) FS.box(W / 2 + 0.08, yF + gh / 2, -D / 2 + 4, 0.3, gh, 7, K.white);
+      /* 玻璃帷幕（每層一個材質，可單獨淡出）*/
+      const gm = new T.MeshPhongMaterial({
+        color: glassBase.d.clone(),
+        transparent: true,
+        opacity: glassBase.od,
+        depthWrite: false,
+        envMap,
+        combine: T.MixOperation,
+        reflectivity: 0.55,
+        specular: 0xffffff,
+        shininess: 90,
+      });
+      const glass = new T.InstancedMesh(UNIT.box, gm, 4 + (i % 2 === 1 ? 2 : 0));
+      glass.frustumCulled = false;
+      const gl = [
+        [0, D / 2 - 0.05, W, 0.06],
+        [0, -D / 2 + 0.05, W, 0.06],
+        [W / 2 - 0.05, 0, 0.06, D],
+        [-W / 2 + 0.05, 0, 0.06, D],
+      ];
+      if (i % 2 === 1) gl.push([-W / 2 + 5, D / 2 + 3.75, 10, 0.05, 1.0], [-W / 2 + 0.05, D / 2 + 1.9, 0.05, 3.8, 1.0]);
+      gl.forEach(([x, z, sx, sz, h], k) => {
+        const hh = h || gh;
+        dummy.position.set(x, yF + hh / 2, z);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(sx, hh, sz);
+        dummy.updateMatrix();
+        glass.setMatrixAt(k, dummy.matrix);
+      });
+      glass.renderOrder = 2;
+      g.add(glass);
+      /* 樓層高亮光帶（樓板帶外緣）*/
+      const accMat = new T.MeshBasicMaterial({ color: "#cfdde6" });
+      const acc = new T.Group();
+      [[0, D / 2 + 0.47, W + 0.95, 0.06], [0, -D / 2 - 0.47, W + 0.95, 0.06], [W / 2 + 0.47, 0, 0.06, D + 0.95], [-W / 2 - 0.47, 0, 0.06, D + 0.95]].forEach(([x, z, sx, sz]) => {
+        const m = new T.Mesh(UNIT.box, accMat);
+        m.position.set(x, y0 + 0.4, z);
+        m.scale.set(sx, 1, sz);
+        acc.add(m);
+      });
+      g.add(acc);
+      /* 這一層的房間 */
+      const ents = data.entities.filter((e) => e.cat === cat.id).slice(0, MAXI);
+      const zones = zonesFor(ents.length || 1);
+      const wallK = K[WALLS[i % WALLS.length]];
+      const used = [];
+      ents.forEach((ent, k) => {
+        const z = zones[k],
+          w = z.x1 - z.x0,
+          d = z.z1 - z.z0,
+          cx = (z.x0 + z.x1) / 2,
+          cz = (z.z0 + z.z1) / 2,
+          ry = z.front ? Math.PI : 0;
+        const type = pickType(ent, used, i + k);
+        used.push(type);
+        // 房間地板
+        F.box(cx, yF + 0.03, cz, w - 0.2, 0.03, d - 0.2, K[TYPE_FLOOR[type]]);
+        // 隔間：走廊側（留門）、與隔壁之間
+        const dz = z.front ? z.z0 : z.z1,
+          door = 2.0,
+          dx = cx + (k % 2 ? -1 : 1) * (w / 2 - 2.0);
+        const segs = [[z.x0, dx - door / 2], [dx + door / 2, z.x1]];
+        segs.forEach(([a, b]) => b - a > 0.05 && F.box((a + b) / 2, yF + WH / 2, dz, b - a, WH, 0.18, wallK));
+        if (z.x1 < X1 - 0.01) F.box(z.x1, yF + WH / 2, cz, 0.18, WH, d, wallK);
+        if (z.first && z.x0 > X0 + 0.01) F.box(z.x0, yF + WH / 2, cz, 0.18, WH, d, wallK);
+        // 設備組
+        const RF = frame(core, cx, yF, cz, ry, FS_);
+        A.occ = { desk: 0.8, meeting: 0.55, board: 0.6, counter: 1 }[type] ?? 0.6;
+        A.typing = type !== "meeting" && type !== "board";
+        const rw = (w - 0.6) / FS_,
+          rd = (d - 0.6) / FS_;
+        ROOM[type](RF, rw, rd, A);
+        // 站著辦公的人
+        if (type === "counter") standing(RF, -0.6, rd / 2 - 0.9, Math.PI);
+        if (type === "rack") standing(RF, 0.6, -0.15, Math.PI / 2);
+        if (type === "printer") standing(RF, rw / 2 - 1.9, -1.8, Math.PI / 2);
+        if (type === "board") standing(RF, -rw / 2 + 1.2, 0.9, Math.PI / 2);
+        if (type === "meeting") standing(RF, -rw / 2 + 1.0, 0.8, Math.PI / 2);
+        if (type === "desk" && rnd() < 0.7) standing(RF, rw / 2 - 1.3, rd / 2 - 1.2, -Math.PI * 0.75);
+        // 點選範圍＝整間房
+        const hit = new T.Mesh(new T.BoxGeometry(w - 0.2, HIT_H, d - 0.2), new T.MeshBasicMaterial({ visible: false }));
+        hit.position.set(cx, yF + HIT_H / 2, cz);
+        hit.userData.eid = ent.id;
+        g.add(hit);
+        pickables.push(hit);
+        const an = new T.Object3D();
+        an.position.set(cx, yF + 3.7, cz);
+        g.add(an);
+        anchors[ent.id] = an;
+        items[ent.id] = { floor: i, cx, cz, w, d, y: yF, type, hit };
+      });
+      // 後排房間兩側的空地
+      if (zones.length && ents.length <= 3) {
+        const zl = zones[0].x0,
+          zr = zones[Math.min(ents.length, zones.length) - 1].x1;
+        [[X0 + 3.6, zl], [zr, X1]].forEach(([a, b]) => {
+          if (b - a < 3) return;
+          const mx = (a + b) / 2;
+          plant(frame(core, mx - (b - a) * 0.28, yF, ZB0 + 1.4, 0, 1.35), 0, 0, 1.4);
+          plant(frame(core, mx + (b - a) * 0.28, yF, ZB0 + 1.4, 0, 1.35), 0, 0, 1.2);
+          const LF = frame(core, mx, yF, (ZB0 + ZB1) / 2, 0, 1.35);
+          const sw = Math.min(3, (b - a - 1) / 1.35);
+          LF.box(0, 0.25, 0, sw, 0.45, 0.95, K.sofa);
+          LF.box(0, 0.62, -0.38, sw, 0.5, 0.2, K.sofa);
+          LF.box(0, 0.22, 1.3, 1.4, 0.06, 0.7, K.woodL);
+        });
+      }
+      // 開放區或走廊的擺設
+      if (ents.length <= 3) {
+        LOUNGE[i % LOUNGE.length](frame(core, 3, yF, (ZF0 + ZF1) / 2, 0, 1.25, 1.0), A);
+        const CF = frame(core, -8 + i * 3.3, yF, ZF0 + 2.4, 0, 1.4);
+        standing(CF, -0.35, 0, Math.PI / 2 - 0.3);
+        standing(CF, 0.35, 0.05, -Math.PI / 2 + 0.3);
+        // 共用設施：沿窗植栽、左側電話亭
+        for (let x = -11; x <= 13; x += 4) {
+          const PF = frame(core, x, yF, 11.5, 0, 1.3);
+          PF.box(0, 0.25, 0, 1.8, 0.5, 0.6, K.wood);
+          PF.ball(-0.4, 0.75, 0, 0.42, K.plant);
+          PF.ball(0.45, 0.8, 0, 0.38, K.plant2);
+        }
+        for (let k = 0; k < 2; k++) {
+          const BF = frame(core, -17.6, yF, 5.2 + k * 2.9, Math.PI / 2, 1.25);
+          BF.box(0, 0.03, 0, 1.9, 0.06, 1.9, K.dark);
+          BF.box(-0.92, 1.1, 0, 0.06, 2.2, 1.9, K.frost);
+          BF.box(0.92, 1.1, 0, 0.06, 2.2, 1.9, K.frost);
+          BF.box(0, 1.1, -0.92, 1.9, 2.2, 0.06, K.frost);
+          BF.box(0, 2.22, 0, 1.95, 0.06, 1.95, K.white);
+          BF.box(0, 0.25, -0.55, 1.3, 0.45, 0.55, A.acc);
+          BF.box(0, 0.72, 0.25, 0.8, 0.05, 0.5, K.woodL);
+        }
+      }
+      else
+        for (const x of [-6, 6, 15]) {
+          plant(frame(core, x, yF, 0, 0, 1.35), 0, 0, 1.2);
+          frame(core, x - 2.8, yF, 0.9, 0, 1.35).box(0, 0.22, 0, 2.2, 0.44, 0.5, K.woodL);
+        }
+      /* 蓋章完成 */
+      const recCore = realize(core, g),
+        skinG = new T.Group(),
+        ceilG = new T.Group();
+      g.add(skinG, ceilG);
+      realize(skin, skinG);
+      realize(ceil, ceilG);
+      const ledRec = realize(leds, g)[0] || null;
+      /* 點樓層的替身（整層的體積）*/
+      const pick = new T.Mesh(new T.BoxGeometry(W + 1, FH, D + 1), new T.MeshBasicMaterial({ visible: false }));
+      pick.position.set(0, y0 + FH / 2, 0);
+      pick.userData.isl = i;
+      g.add(pick);
+      IP.push(pick);
+      floors.push({ i, y0, yF, g, gm, skinG, ceilG, acc, accMat, accBase: C("#cfdde6"), tagC: muted(col), col, ents, pick, ledRec, lift: 0, skin: 1, ceil: 1, hk: 0, scrPal: A.scr });
+      isl.push({ c: V3(0, y0 + FH / 2, 0) });
+    });
+    leds = null;
+
+    /* ---------- 屋頂 ---------- */
+    const roofG = new T.Group();
+    scene.add(roofG);
+    {
+      const R = mkStamp(),
+        F = frame(R, 0, 0, 0);
+      F.box(0, HT + SL / 2, 0, W, SL, D, K.slab);
+      band(F, HT + 0.25, 0.8);
+      F.box(0, HT + 1.05, D / 2 + 0.3, W + 0.9, 0.9, 0.3, K.fascia);
+      F.box(0, HT + 1.05, -D / 2 - 0.3, W + 0.9, 0.9, 0.3, K.fascia);
+      F.box(W / 2 + 0.3, HT + 1.05, 0, 0.3, 0.9, D + 0.9, K.fascia);
+      F.box(-W / 2 - 0.3, HT + 1.05, 0, 0.3, 0.9, D + 0.9, K.fascia);
+      F.box(-W / 2 + 7, HT + SL + 1.7, -D / 2 + 5, 10, 3.4, 7, K.white);
+      F.box(-W / 2 + 7, HT + SL + 1.7, -D / 2 + 8.52, 7, 2.4, 0.05, K.frost);
+      [0, 3, 6].forEach((dx) => F.box(W / 2 - 12 + dx, HT + SL + 0.7, -D / 2 + 4, 2.2, 1.4, 1.8, K.metal));
+      F.box(8, HT + SL + 0.12, 5, 14, 0.24, 9, K.lawn);
+      for (let k = 0; k < 6; k++) F.ball(2 + k * 2.3, HT + SL + 0.7, 1.4 + (k % 2) * 0.8, 0.7, k % 2 ? K.plant : K.plant2);
+      for (let k = 0; k < 5; k++) F.box(-6 + k * 2.6, HT + SL + 0.2, 7.5, 2.2, 0.06, 1.4, K.dark, true);
+      F.cyl(-W / 2 + 10, HT + SL + 5.4, -D / 2 + 4, 0.1, 4, K.metal);
+      F.sph(-W / 2 + 10, HT + SL + 7.5, -D / 2 + 4, 0.28, K.red);
+      realize(R, roofG);
+    }
+    let roofK = 1;
+    const ICE = C("#7cc4e8"),
+      NIGHTLED = C("#e6f6ff");
+
+    /* ---------- 前方道路與來往的車 ---------- */
+    const roadZ = PZ + PD / 2 + 4.2;
+    const asphaltTex = mkTex((g, n) => {
+      g.fillStyle = "#6b6f74";
+      g.fillRect(0, 0, n, n);
+      for (let k = 0; k < 400; k++) {
+        g.fillStyle = rnd() < 0.5 ? "#73777c" : "#63676c";
+        g.fillRect(rnd() * n, rnd() * n, 2, 2);
+      }
+      g.fillStyle = "#e9e6dc";
+      g.fillRect(0, n / 2 - 3, n * 0.55, 6); // 中線虛線
+    });
+    slabTex(asphaltTex, PW, 8.4, 0, -0.62, roadZ, 8.4, 1.16);
+    {
+      const RS = mkStamp(),
+        RF = frame(RS, 0, 0, 0);
+      RF.box(0, 0.07, roadZ - 4.3, PW, 0.14, 0.3, K.white);
+      RF.box(0, 0.07, roadZ + 4.3, PW, 0.14, 0.3, K.white);
+      realize(RS, scene);
+    }
+    const CARC = ["#f2f2ef", "#b9bec4", "#4b5058", "#7f93a8", "#a8786c", "#d9d2c3"].map((h) => pal(h, "#" + C(h).multiplyScalar(0.4).getHexString()));
+    const cars = [];
+    for (let k = 0; k < 6; k++) cars.push({ lane: k % 2, x: -PW / 2 + (k * PW) / 6 + rnd() * 3, v: (5.5 + rnd() * 2.5) * (k % 2 ? -1 : 1), col: CARC[k % CARC.length] });
+    const carBox = new T.InstancedMesh(UNIT.box, MAT.lit, cars.length * 3),
+      carWheel = new T.InstancedMesh(UNIT.cyl, MAT.lit, cars.length * 4),
+      carLight = new T.InstancedMesh(UNIT.box, MAT.glow, cars.length * 2);
+    const carCols = [],
+      wheelCols = [],
+      lightCols = [];
+    cars.forEach((c) => {
+      carCols.push(c.col, c.col, pal("#3a4450", "#1c2a3a"));
+      for (let k = 0; k < 4; k++) wheelCols.push(K.dark);
+      lightCols.push(pal("#f3eee0", "#fff1c4"), pal("#f3eee0", "#fff1c4"));
+    });
+    [[carBox, carCols], [carWheel, wheelCols], [carLight, lightCols]].forEach(([im, cols]) => {
+      im.frustumCulled = false;
+      im.castShadow = im.material === MAT.lit;
+      im.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      cols.forEach((c, q) => im.setColorAt(q, c.d));
+      im.instanceColor.needsUpdate = true;
+      themed.push({ im, cols });
+      scene.add(im);
+    });
+    const cd = new T.Object3D();
+    const putC = (im, i, x, y, z, sx, sy, sz, rx = 0) => {
+      cd.position.set(x, y, z);
+      cd.rotation.set(rx, 0, 0);
+      cd.scale.set(sx, sy, sz);
+      cd.updateMatrix();
+      im.setMatrixAt(i, cd.matrix);
+    };
+    const drawCars = (dt) => {
+      const half = PW / 2 - 1.5;
+      cars.forEach((c, k) => {
+        if (!reduce) c.x += c.v * dt;
+        c.x > half + 4 && (c.x = -half - 4);
+        c.x < -half - 4 && (c.x = half + 4);
+        // 到基座邊緣時縮小消失，從另一端長出來
+        const sc = clamp((half + 2 - Math.abs(c.x)) / 2.5),
+          z = roadZ + (c.lane ? -1.9 : 1.9),
+          dir = Math.sign(c.v);
+        putC(carBox, k * 3, c.x, 0.62 * sc, z, 4.0 * sc, 0.75 * sc, 1.8 * sc);
+        putC(carBox, k * 3 + 1, c.x - dir * 0.3 * sc, 1.22 * sc, z, 2.2 * sc, 0.55 * sc, 1.62 * sc);
+        putC(carBox, k * 3 + 2, c.x - dir * 0.3 * sc, 1.22 * sc, z, 2.26 * sc, 0.4 * sc, 1.66 * sc);
+        [[-1.3, -0.82], [-1.3, 0.82], [1.3, -0.82], [1.3, 0.82]].forEach(([wx, wz], j) => putC(carWheel, k * 4 + j, c.x + wx * sc, 0.36 * sc, z + wz * sc, 0.36 * sc, 0.25 * sc, 0.36 * sc, Math.PI / 2));
+        putC(carLight, k * 2, c.x + dir * 2.0 * sc, 0.7 * sc, z - 0.55 * sc, 0.06 * sc, 0.16 * sc, 0.32 * sc);
+        putC(carLight, k * 2 + 1, c.x + dir * 2.0 * sc, 0.7 * sc, z + 0.55 * sc, 0.06 * sc, 0.16 * sc, 0.32 * sc);
+      });
+      carBox.instanceMatrix.needsUpdate = carWheel.instanceMatrix.needsUpdate = carLight.instanceMatrix.needsUpdate = true;
+    };
+    drawCars(0);
+
+    /* ---------- 廣場上的行人（共用人群模組）---------- */
+    const HS = 1.4; // 室外人物比例（與放大後的家具一致）
+    const rect = (x0, z0, x1, z1) => [V3(x0, 0, z0), V3(x1, 0, z0), V3(x1, 0, z1), V3(x0, 0, z1), V3(x0, 0, z0)];
+    const zS = PZ + PD / 2 - 2.5;
+    const oLoops = [
+      rect(-W / 2 - 4.5, -D / 2 - 4, W / 2 + 4.5, D / 2 + 5.6),
+      rect(-PW / 2 + 2.5, zS - 0.8, PW / 2 - 2.5, zS + 0.8),
+      rect(-PW / 2 + 1.6, -D / 2 - 6, -PW / 2 + 1.6 + 0.01, zS),
+      rect(PW / 2 - 1.6, -D / 2 - 6, PW / 2 - 1.6 + 0.01, zS),
+      [V3(4, 0, D / 2 + 1.2), V3(4, 0, zS), V3(4.01, 0, D / 2 + 1.2)],
+    ];
+    const crowd = mkCrowd(T, scene, {
+      scale: HS,
+      rnd,
+      reduce,
+      loops: oLoops,
+      pal: { skin: K.skin, hair: K.hairC, shirt: K.shirtC, pants: K.pantsC, bag: [K.dark, K.woodL, K.paper], tights: [K.dark] },
+    });
+    const NW = 22 + Math.min(10, N * 2);
+    for (let k = 0; k < NW; k++) {
+      const li = k < NW * 0.4 ? 0 : k < NW * 0.7 ? 1 : 2 + (k % 3);
+      crowd.add("walk", { loop: li, s: rnd() * crowd.loopLen[li].L, v: (0.9 + rnd() * 0.6) * (rnd() < 0.5 ? 1 : -1), off: (rnd() - 0.5) * 1.2 });
+    }
+    // 入口前、長椅邊站著聊天的人
+    [[1.5, D / 2 + 6.2, 0.4], [2.4, D / 2 + 6.4, -2.6], [-6, D / 2 + 10.4, 3.1]].forEach(([x, z, ry]) => crowd.add("idle", { x, z, ry }));
+    crowd.finalize(MAT.lit, themed);
+    crowd.draw(0, 0, null);
+
+    /* ---------- 光柱與房間框線（點到細項時亮起）---------- */
+    const beamH = FH - SL - 1.2;
+    const beamMat = new T.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: T.AdditiveBlending,
+      side: T.DoubleSide,
+      uniforms: { uTime: { value: 0 }, uK: { value: 0 }, uCol: { value: new T.Color("#5fe3ff") } },
+      vertexShader: "varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+      fragmentShader:
+        "varying vec2 vUv; uniform float uTime,uK; uniform vec3 uCol; void main(){ float fade=pow(1.0-vUv.y,1.5); float st=0.55+0.45*sin(vUv.y*26.0-uTime*3.2); float ed=0.65+0.35*sin(vUv.x*37.7+uTime*1.3); gl_FragColor=vec4(uCol*(0.6+0.7*st), fade*0.42*uK*ed); }",
+    });
+    const beam = new T.Mesh(new T.CylinderGeometry(0.8, 1, beamH, 32, 1, true).translate(0, beamH / 2, 0), beamMat);
+    beam.visible = false;
+    beam.renderOrder = 3;
+    scene.add(beam);
+    const frameMat = new T.MeshBasicMaterial({ color: "#5fe3ff", transparent: true, opacity: 0, depthWrite: false });
+    const rimG = new T.Group();
+    const rim = [0, 1, 2, 3].map(() => {
+      const m = new T.Mesh(UNIT.box, frameMat);
+      rimG.add(m);
+      return m;
+    });
+    rimG.visible = false;
+    scene.add(rimG);
+    let focusId = null,
+      fk = 0;
+
+    /* ---------- 夜晚飄浮的資料微粒 ---------- */
+    const PN = 160,
+      ppos = new Float32Array(PN * 3);
+    for (let k = 0; k < PN; k++) ppos.set([(rnd() - 0.5) * 80, rnd() * (HT + 10), (rnd() - 0.5) * 60], k * 3);
+    const pgeo = new T.BufferGeometry();
+    pgeo.setAttribute("position", new T.BufferAttribute(ppos, 3));
+    const pmat = new T.PointsMaterial({ color: "#6fe6ff", size: 0.25, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending });
+    scene.add(new T.Points(pgeo, pmat));
+
+    /* ---------- 日夜 ---------- */
+    let mix = 0;
+    const tc = new T.Color();
+    const setTheme = (m) => {
+      mix = m;
+      themed.forEach((r) => {
+        for (let k = 0; k < r.cols.length; k++) r.im.setColorAt(k, tc.copy(r.cols[k].d).lerp(r.cols[k].n, m));
+        r.im.instanceColor.needsUpdate = true;
+      });
+      hemi.color.copy(L.hemiSky[0]).lerp(L.hemiSky[1], m);
+      hemi.groundColor.copy(L.hemiGnd[0]).lerp(L.hemiGnd[1], m);
+      hemi.intensity = L.hemiI[0] + (L.hemiI[1] - L.hemiI[0]) * m;
+      sun.color.copy(L.sunC[0]).lerp(L.sunC[1], m);
+      sun.intensity = L.sunI[0] + (L.sunI[1] - L.sunI[0]) * m;
+      fog.color.copy(L.fog[0]).lerp(L.fog[1], m);
+      // 白天：只有淡藍漸層天空；夜晚：深色地面、格線與遠處城市
+      groundMat.opacity = m;
+      ground.visible = m > 0.02;
+      skyIM.visible = m > 0.5;
+      gridMat.color.set("#14406e");
+      gridMat.opacity = 0.45 * m;
+      fog.near = L.fogN[0] + (L.fogN[1] - L.fogN[0]) * m;
+      fog.far = L.fogF[0] + (L.fogF[1] - L.fogF[0]) * m;
+      plazaMats.forEach((pm) => pm.color.set("#ffffff").lerp(C("#3a4558"), m));
+      envSet(m);
+      pmat.opacity = 0.85 * m;
+      floors.forEach((f) => {
+        f.gm.color.copy(glassBase.d).lerp(glassBase.n, m);
+        f.gm.emissive.copy(glassBase.ed).lerp(glassBase.en, m);
+      });
+      const bl = m > 0.5 ? T.AdditiveBlending : T.NormalBlending;
+      if (beamMat.blending !== bl) {
+        beamMat.blending = bl;
+        beamMat.needsUpdate = true;
+      }
+    };
+    setTheme(0);
+
+    /* ---------- 鏡頭 ---------- */
+    const TAN = Math.tan((40 * Math.PI) / 360);
+    const asp = () => innerWidth / Math.max(1, innerHeight);
+    const mobile = () => innerWidth <= 760;
+    const fit = (w, h) => Math.max(h / 2 / TAN, w / 2 / (TAN * asp()));
+    const fitPanel = (w, h) =>
+      mobile()
+        ? Math.max(h / 2 / (TAN * 0.54), w / 2 / (TAN * asp()))
+        : Math.max(h / 2 / TAN, w / 2 / (TAN * Math.max(0.5, (innerWidth - 360) / Math.max(1, innerHeight))));
+    const orbit = (c, d, az, el) => ({ pos: V3(c.x + Math.sin(az) * Math.cos(el) * d, c.y + Math.sin(el) * d, c.z + Math.cos(az) * Math.cos(el) * d), target: c.clone() });
+    const OV_AZ = 0.62,
+      OV_EL = 0.26;
+    const ovPose = () => {
+      const pw = W * Math.cos(OV_AZ) + D * Math.sin(OV_AZ) + 16,
+        ph = HT + 8 + (W * Math.sin(OV_AZ) + D * Math.cos(OV_AZ)) * Math.sin(OV_EL);
+      const d = fit(pw, ph) * (mobile() ? 1.12 : 1.38);
+      return orbit(V3(asp() > 1.25 ? -2 : mobile() ? 7 : 0, HT * 0.44, 0), d, OV_AZ, OV_EL);
+    };
+    const PL_AZ = 0.5,
+      PL_EL = 0.86;
+    const planPose = (i) => {
+      const f = floors[i];
+      const pw = W * Math.cos(PL_AZ) + D * Math.sin(PL_AZ) + 3,
+        ph = (W * Math.sin(PL_AZ) + D * Math.cos(PL_AZ)) * Math.sin(PL_EL) + 4;
+      return orbit(V3(0, f.yF, 1), fitPanel(mobile() ? pw * 0.62 : pw, ph) * 1.3, PL_AZ, PL_EL);
+    };
+    const roomPose = (id) => {
+      const it = items[id],
+        s = Math.max(it.w, it.d) + 4;
+      return orbit(V3(it.cx, it.y + 0.6, it.cz), fitPanel(s * 1.2, s * 0.95), 0.42, 0.86);
+    };
+    const R0 = Math.max(30, fit(W + 16, HT + 20) / 3.2);
+
+    /* ---------- 鏡頭動線：從全景穿過玻璃進到樓層 ---------- */
+    const TT = () => window.__tour;
+    let active = -1,
+      path = null;
+    const ease = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+    const startPath = (a, endPose, cam, ctl) => {
+      const f = floors[a],
+        y = f.yF,
+        gx = 6;
+      const P0 = cam.position.clone(),
+        T0 = ctl.target.clone();
+      const gOut = V3(gx + 4, y + 2.2, D / 2 + 11),
+        gIn = V3(gx, y + 2.3, D / 2 - 5);
+      path = {
+        t0: performance.now(),
+        ms: 3200 / ((TT() && TT().S.speed) || 1),
+        a,
+        pc: new T.CatmullRomCurve3([P0, gOut, gIn, endPose.pos.clone()], false, "centripetal"),
+        tc: new T.CatmullRomCurve3([T0, V3(gx, y + 1.8, 0), V3(gx * 0.5, y + 1.0, -5), endPose.target.clone()], false, "centripetal"),
+        p: 0,
+      };
+    };
+    const activeFloor = (S) => (S && (S.mode === "island" || S.mode === "tour") && S.isl >= 0 ? S.isl : -1);
+
+    /* ---------- 樓層標籤＋指引線（全景時顯示，可點）---------- */
+    const tagWrap = document.createElement("div");
+    tagWrap.id = "ftags";
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    tagWrap.appendChild(svg);
+    document.body.appendChild(tagWrap);
+    let hoverF = -1;
+    const tags = floors.map((f, i) => {
+      const b = document.createElement("button");
+      b.className = "ftag";
+      b.style.setProperty("--fc", "#" + f.tagC.getHexString());
+      b.innerHTML = `<b>${i + 1}F</b><span></span>`;
+      b.querySelector("span").textContent = cats[i].name;
+      b.onclick = () => TT() && TT().focusIsland(i);
+      b.onmouseenter = () => (hoverF = i);
+      b.onmouseleave = () => (hoverF = -1);
+      tagWrap.appendChild(b);
+      const path = document.createElementNS(svgNS, "path");
+      const dot = document.createElementNS(svgNS, "circle");
+      dot.setAttribute("r", "3.5");
+      dot.style.fill = "#" + f.tagC.getHexString();
+      svg.append(path, dot);
+      return { b, path, dot };
+    });
+    const pv = new T.Vector3();
+    const toScr = (x, y, z, cam) => {
+      pv.set(x, y, z).project(cam);
+      return [((pv.x + 1) / 2) * innerWidth, ((1 - pv.y) / 2) * innerHeight];
+    };
+    const layoutTags = (cam, show) => {
+      tagWrap.classList.toggle("off", !show);
+      if (!show) return;
+      let colX = 0;
+      floors.forEach((f) => {
+        colX = Math.max(colX, toScr(W / 2 + 0.5, f.y0 + FH * 0.5, -D / 2, cam)[0], toScr(W / 2 + 0.5, f.y0 + FH * 0.5, D / 2, cam)[0]);
+      });
+      colX += mobile() ? 10 : 34;
+      tags.forEach((t, i) => {
+        const f = floors[i];
+        const [ax, ay] = toScr(W / 2 + 0.2, f.y0 + FH * 0.55, D / 2 - 6, cam);
+        const tw = t.b.offsetWidth || 120;
+        const x = Math.min(colX, innerWidth - tw - 8);
+        t.b.style.left = x + "px";
+        t.b.style.top = ay + "px";
+        t.path.setAttribute("d", `M${ax.toFixed(1)} ${ay.toFixed(1)} L${(x - 4).toFixed(1)} ${ay.toFixed(1)}`);
+        t.dot.setAttribute("cx", ax.toFixed(1));
+        t.dot.setAttribute("cy", ay.toFixed(1));
+      });
+    };
+
+    /* ---------- 對外介面（和六角群島相同的版型介面）---------- */
+    const Wd = {
+      anchors,
+      pickables,
+      islandPicks: IP,
+      isl,
+      dynLabels: [],
+      noCatLabels: true,
+      agents: [],
+      pigeons: [],
+      R: R0,
+      get overviewPose() {
+        return ovPose();
+      },
+      focusPose: (id) => roomPose(id),
+      islandPose: (i) => (floors[i] ? planPose(i) : null),
+      setFocus(id) {
+        focusId = id && items[id] ? id : null;
+        if (!focusId) return;
+        const it = items[focusId];
+        beam.position.set(it.cx, it.y, it.cz);
+        const r = Math.min(it.w, it.d) * 0.3;
+        beam.scale.set(r, 1, r);
+        const w = it.w - 0.3,
+          d = it.d - 0.3,
+          y = it.y + 0.09;
+        rim[0].position.set(it.cx, y, it.cz - d / 2);
+        rim[0].scale.set(w, 0.06, 0.12);
+        rim[1].position.set(it.cx, y, it.cz + d / 2);
+        rim[1].scale.set(w, 0.06, 0.12);
+        rim[2].position.set(it.cx - w / 2, y, it.cz);
+        rim[2].scale.set(0.12, 0.06, d);
+        rim[3].position.set(it.cx + w / 2, y, it.cz);
+        rim[3].scale.set(0.12, 0.06, d);
+      },
+      setTheme,
+      floors,
+      items,
+      update(t, dt, cam) {
+        const tour = TT(),
+          S = tour && tour.S,
+          ctl = tour && tour.controls;
+        /* 目前所在樓層改變 → 安排鏡頭與樓層顯示 */
+        const a = activeFloor(S);
+        if (a !== active) {
+          const prev = active;
+          active = a;
+          path = null;
+          if (a >= 0 && prev < 0 && ctl && !reduce) {
+            const pose = S.mode === "tour" && S.cur ? roomPose(S.cur.entity) : planPose(a);
+            startPath(a, pose, cam, ctl);
+          }
+        }
+        let gateLift = 1,
+          gateSkin = 1;
+        if (path) {
+          const p = Math.min(1, (performance.now() - path.t0) / path.ms),
+            e = ease(p);
+          // 時間分三段：飛到玻璃外（0–40%）、慢慢穿過玻璃（40–62%）、升到平面圖（62–100%）
+          const u = e < 0.4 ? (e / 0.4) / 3 : e < 0.62 ? 1 / 3 + ((e - 0.4) / 0.22) / 3 : 2 / 3 + ((e - 0.62) / 0.38) / 3;
+          cam.position.copy(path.pc.getPoint(u));
+          ctl.target.copy(path.tc.getPoint(u));
+          cam.lookAt(ctl.target);
+          gateLift = clamp((e - 0.22) / 0.36);
+          gateSkin = clamp((e - 0.45) / 0.12);
+          if (p >= 1) path = null;
+        }
+        /* 樓層：上方升起移開、所在樓層玻璃與天花淡出 */
+        const k = Math.min(1, dt * 4);
+        floors.forEach((f, j) => {
+          const wantLift = active >= 0 && j > active ? 1 : 0,
+            wantSkin = active === j ? 0 : 1;
+          if (path) {
+            f.lift = Math.max(f.lift, wantLift * gateLift);
+            f.skin = wantSkin ? f.skin + (1 - f.skin) * k : Math.min(f.skin, 1 - gateSkin);
+          } else {
+            f.lift += (wantLift - f.lift) * k;
+            f.skin += (wantSkin - f.skin) * k;
+          }
+          f.g.position.y = f.lift * 16;
+          f.g.visible = f.lift < 0.97;
+          f.gm.opacity = (glassBase.od + (glassBase.on - glassBase.od) * mix) * f.skin;
+          f.skinG.visible = f.skin > 0.35;
+          f.ceilG.visible = f.skin > 0.6;
+          // 點選：全景時只能點樓層；在某層時只能點該層的房間與下方樓層
+          const lay = (m, on) => (on ? m.layers.set(0) : m.layers.set(31));
+          lay(f.pick, f.lift < 0.5 && j !== active);
+          f.ents.forEach((e) => items[e.id] && lay(items[e.id].hit, active === j));
+          // 高亮光帶：滑過標籤、或就是所在樓層
+          const want = j === hoverF || j === active ? 1 : 0;
+          f.hk += (want - f.hk) * Math.min(1, dt * 5);
+          f.accMat.color.copy(f.accBase).lerp(ICE, f.hk).lerp(NIGHTLED, mix * (1 - f.hk) * 0.8);
+          f.acc.children.forEach((m) => (m.scale.y = 0.05 + 0.2 * f.hk));
+        });
+        amb.intensity += (mix * (active >= 0 ? 1.6 : 0.25) - amb.intensity) * k;
+        roofK += ((active >= 0 ? 1 : 0) - roofK) * k;
+        if (path) roofK = Math.max(roofK, gateLift);
+        roofG.position.y = roofK * 16;
+        roofG.visible = roofK < 0.97;
+        tallG.visible = active !== 0;
+        /* 光柱、房間框線 */
+        fk += ((focusId ? 1 : 0) - fk) * Math.min(1, dt * (focusId ? 2.4 : 3));
+        beamMat.uniforms.uTime.value = t;
+        beamMat.uniforms.uK.value = fk;
+        beam.visible = rimG.visible = fk > 0.004;
+        frameMat.opacity = fk * (0.65 + 0.3 * Math.sin(t * 3));
+        if (focusId) {
+          const f = floors[items[focusId].floor];
+          tc.copy(f.scrPal.d).lerp(f.scrPal.n, mix);
+          beamMat.uniforms.uCol.value.copy(tc);
+          frameMat.color.copy(tc);
+        }
+        /* 樓層標籤 */
+        layoutTags(cam, !!S && S.mode === "overview" && !path);
+        crowd.draw(t, dt, cam);
+        drawCars(dt);
+        if (reduce) return;
+        /* 機櫃燈號閃爍 */
+        floors.forEach((f) => {
+          const r = f.ledRec;
+          if (!r || !f.g.visible) return;
+          for (let q = 0; q < r.cols.length; q++) r.im.setColorAt(q, tc.copy(r.cols[q].d).multiplyScalar(Math.sin(t * 5.5 + q * 2.3) > 0.1 ? 1 : 0.22));
+          r.im.instanceColor.needsUpdate = true;
+        });
+        const pp = pgeo.attributes.position;
+        for (let q = 0; q < PN; q++) {
+          let y = pp.getY(q) + dt * (0.5 + (q % 5) * 0.12);
+          y > HT + 10 && (y = 0);
+          pp.setY(q, y);
+        }
+        pp.needsUpdate = true;
+      },
+    };
+
+    /* 使用者拖曳鏡頭時，停止動線 */
+    setTimeout(() => {
+      const c = TT() && TT().controls;
+      c && c.addEventListener("start", () => (path = null));
+    }, 0);
+
+    /* ---------- 手機：上下撥動切換樓層 ---------- */
+    const stage = document.getElementById("stage");
+    let sw = null;
+    stage.addEventListener("pointerdown", (e) => (sw = e.pointerType === "touch" ? [e.clientX, e.clientY, performance.now()] : null));
+    stage.addEventListener("pointerup", (e) => {
+      if (!sw) return;
+      const dx = e.clientX - sw[0],
+        dy = e.clientY - sw[1],
+        dt = performance.now() - sw[2];
+      sw = null;
+      const tt = TT();
+      if (!tt || dt > 700 || Math.abs(dy) < 70 || Math.abs(dy) < Math.abs(dx) * 1.6) return;
+      const cur = tt.S.isl;
+      const to = dy < 0 ? (cur < 0 ? 0 : cur + 1) : cur - 1; // 往上撥＝去更高的一層
+      if (to < 0) return tt.home();
+      if (to >= N) return;
+      tt.focusIsland(to);
+    });
+    return Wd;
+  },
+};
+
+/* ===== 版型：市集（low poly；一區白色帳篷一個分類，一個攤位一個細項；零件用「蓋章」InstancedMesh 畫）===== */
+Hc.market = {
+  name: "市集",
+  build({ THREE: T, scene, data, colorOf }) {
+    const cats = data.categories,
+      N = Math.max(1, cats.length),
+      MAXI = 6;
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let focusId = null,
+      fk = 0;
+    const V3 = (x, y, z) => new T.Vector3(x, y, z);
+    const C = (h) => new T.Color(h);
+    const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647), (seed - 1) / 2147483646);
+    const pick = (a) => a[Math.floor(rnd() * a.length)];
+    const neon = (hex, l, s) => {
+      const o = {};
+      C(hex).getHSL(o);
+      return new T.Color().setHSL(o.h, s, l);
+    };
+
+    /* ---------- 尺寸與配置 ---------- */
+    const TW = 3.2, // 帳篷寬
+      TDP = 3.0, // 帳篷深
+      PX = 3.7, // 帳篷間距
+      ROWP = 6.4, // 兩排帳篷的間距（含前方走道）
+      WK = 5.2, // 中央步道寬
+      R = Math.ceil(N / 2), // 區塊排數
+      GAPZ = 3.2,
+      FRONT = 5, // 入口廣場深
+      BACK = 10.5; // 餐車廣場深
+    // 每區：項目 3 個以內一排（不足 3 頂補上裝飾帳篷），4–6 個兩排
+    const nOf = cats.map((c) => Math.min(MAXI, data.entities.filter((e) => e.cat === c.id).length));
+    const perRow = (n) => Math.max(3, n <= 3 ? n : Math.ceil(n / 2));
+    const rowsOf = (n) => (n <= 3 ? 1 : 2);
+    const BW = PX * Math.max(...nOf.map(perRow), 3), // 區塊寬（各區一致，左右對齊）
+      BX = N === 1 ? 0 : WK / 2 + 1.6 + BW / 2, // 區塊中心 x
+      HW = (N === 1 ? WK / 2 + 1.6 + BW : BX + BW / 2) + 3.4; // 廣場半寬
+    const rowD = Array.from({ length: R }, (_, r) => Math.max(...[nOf[r * 2] || 0, nOf[r * 2 + 1] || 0].map((n) => rowsOf(n) * ROWP)));
+    const DC = FRONT + rowD.reduce((a, b) => a + b, 0) + (R - 1) * GAPZ + BACK;
+    const ZF = DC / 2, // 前牆
+      ZB = -DC / 2; // 主館前緣
+    const blockC = (i) => {
+      const r = Math.floor(i / 2),
+        side = N === 1 ? 0 : i % 2 === 0 ? -1 : 1;
+      let z = ZF - FRONT;
+      for (let k = 0; k < r; k++) z -= rowD[k] + GAPZ;
+      const x = N === 1 ? -(WK / 2 + 1.6 + BW / 2) : side * BX;
+      return V3(x, 0, z - (rowsOf(nOf[i]) * ROWP) / 2);
+    };
+
+    /* ---------- 色票（日／夜）---------- */
+    const PAL = new Map();
+    const pal = (d, n) => {
+      n = n || "#" + C(d).multiplyScalar(0.42).getHexString();
+      const k = d + "|" + n;
+      PAL.has(k) || PAL.set(k, { d: C(d), n: C(n), same: false });
+      return PAL.get(k);
+    };
+    const palC = (d, n) => ({ d, n, same: false });
+    const K = {
+      canvas: pal("#f7f3ea", "#9a9486"),
+      cloth: pal("#efe6d6"),
+      clothB: pal("#dfe7ea"),
+      wood: pal("#b88a5a"),
+      woodL: pal("#d9b98e"),
+      metal: pal("#9aa3aa"),
+      dark: pal("#3a3f45"),
+      white: pal("#fbfaf6"),
+      brick: pal("#b5634b"),
+      brickD: pal("#9c5440"),
+      stone: pal("#d8d4cc"),
+      roof: pal("#8d8781"),
+      roofD: pal("#676d73"),
+      frame: pal("#2f3438"),
+      glass: pal("#5f6b70", "#3a3320"),
+      trunk: pal("#7a5a40"),
+      leaf: pal("#7bab4f"),
+      leaf2: pal("#93bf5b"),
+      leaf3: pal("#5f9445"),
+      hedge: pal("#6e9f4a"),
+      pot: pal("#c8b8a4"),
+      soil: pal("#7a6250"),
+      paper: pal("#fffdf8"),
+      ceramic: ["#d8dde0", "#a9b8c2", "#e8e2d6", "#8fa3ad", "#c9b8a2"].map((h) => pal(h)),
+      art: ["#9cb4c8", "#d9b38c", "#a7c1a4", "#c8a6a0"].map((h) => pal(h)),
+      bag: pal("#e8dcc4"),
+      skin: ["#f1c9a5", "#e0b08a", "#c99772", "#f5d6b8"].map((h) => pal(h)),
+      hair: ["#2b2622", "#3e2f25", "#151515", "#5a4332"].map((h) => pal(h)),
+      shirt: ["#ffffff", "#e9e4d8", "#9fb3c4", "#c9a98a", "#7d8f7a", "#3f4a57", "#d8c3a5", "#a6b5a0", "#2f3b48", "#c7b6c9"].map((h) => pal(h)),
+      pants: ["#2f3a4a", "#4a4f55", "#8a7d6b", "#e6e1d6", "#3b4636"].map((h) => pal(h)),
+      bulb: pal("#d9d5c8", "#ffd58a"),
+      win: pal("#4f5a60", "#ffcf86"),
+      lamp: pal("#e8e4d8", "#ffe2a0"),
+      truck: ["#9fbfa6", "#e6c46e", "#e9b9bf", "#9fb3cf"].map((h) => pal(h)),
+    };
+
+    /* ---------- 蓋章（同形狀同材質→一個 InstancedMesh）---------- */
+    const pyrGeo = new T.CylinderGeometry(0, 1, 1, 4, 1).rotateY(Math.PI / 4);
+    // 單位三角柱：寬 1、高 1、深 1，底邊在 y=0，尖端朝上（屋頂、山牆用）
+    const triGeo = new T.CylinderGeometry(1, 1, 1, 3, 1).rotateX(-Math.PI / 2).translate(0, 0.5, 0).scale(1 / Math.sqrt(3), 1 / 1.5, 1);
+    const UNIT = {
+      box: new T.BoxGeometry(1, 1, 1),
+      cyl: new T.CylinderGeometry(1, 1, 1, 10),
+      cone: new T.CylinderGeometry(0.62, 1, 1, 8),
+      ball: new T.IcosahedronGeometry(1, 0),
+      sph: new T.SphereGeometry(1, 8, 6),
+      pyr: pyrGeo,
+      tri: triGeo,
+      oct: new T.CylinderGeometry(1, 1, 1, 8),
+    };
+    const MAT = { lit: new T.MeshLambertMaterial({ color: 0xffffff, flatShading: true }), glow: new T.MeshBasicMaterial({ color: 0xffffff }) };
+    const themed = [];
+    const mkStamp = () => {
+      const B = new Map();
+      return {
+        B,
+        put(shape, lit, col, x, y, z, sx, sy, sz, ry = 0, rz = 0, rx = 0) {
+          const key = shape + (lit ? "L" : "G");
+          B.has(key) || B.set(key, { shape, lit, items: [] });
+          B.get(key).items.push({ x, y, z, sx, sy, sz, ry, rz, rx, col });
+        },
+      };
+    };
+    const dummy = new T.Object3D();
+    const realize = (S, parent, shadow = true) => {
+      const out = [];
+      S.B.forEach((b) => {
+        if (!b.items.length) return;
+        const im = new T.InstancedMesh(UNIT[b.shape], b.lit ? MAT.lit : MAT.glow, b.items.length);
+        im.frustumCulled = false;
+        b.items.forEach((it, k) => {
+          dummy.position.set(it.x, it.y, it.z);
+          dummy.rotation.set(it.rx, it.ry, it.rz);
+          dummy.scale.set(it.sx, it.sy, it.sz);
+          dummy.updateMatrix();
+          im.setMatrixAt(k, dummy.matrix);
+          im.setColorAt(k, it.col.d);
+        });
+        im.instanceMatrix.needsUpdate = true;
+        im.instanceColor.needsUpdate = true;
+        im.castShadow = im.receiveShadow = b.lit && shadow;
+        parent.add(im);
+        const rec = { im, cols: b.items.map((it) => it.col) };
+        themed.push(rec);
+        out.push(rec);
+      });
+      return out;
+    };
+    const frame = (S, ox, oy, oz, ry = 0, sc = 1) => {
+      const c = Math.cos(ry),
+        s = Math.sin(ry);
+      const P = (x, z) => [ox + (x * c + z * s) * sc, oz + (-x * s + z * c) * sc];
+      return {
+        box(x, y, z, w, h, d, col, lit = true, r2 = 0, rz = 0) {
+          const [X, Z] = P(x, z);
+          S.put("box", lit, col, X, oy + y * sc, Z, w * sc, h * sc, d * sc, ry + r2, rz);
+        },
+        cyl(x, y, z, r, h, col, lit = true) {
+          const [X, Z] = P(x, z);
+          S.put("cyl", lit, col, X, oy + y * sc, Z, r * sc, h * sc, r * sc);
+        },
+        cone(x, y, z, r, h, col) {
+          const [X, Z] = P(x, z);
+          S.put("cone", true, col, X, oy + y * sc, Z, r * sc, h * sc, r * sc);
+        },
+        ball(x, y, z, r, col, sy = 1) {
+          const [X, Z] = P(x, z);
+          S.put("ball", true, col, X, oy + y * sc, Z, r * sc, r * sy * sc, r * sc, rnd() * 3);
+        },
+        sph(x, y, z, r, col, lit = true, sy = 1) {
+          const [X, Z] = P(x, z);
+          S.put("sph", lit, col, X, oy + y * sc, Z, r * sc, r * sy * sc, r * sc);
+        },
+        pyr(x, y, z, side, h, col) {
+          const [X, Z] = P(x, z);
+          S.put("pyr", true, col, X, oy + y * sc, Z, (side / Math.SQRT2) * sc, h * sc, (side / Math.SQRT2) * sc, ry);
+        },
+        tri(x, y, z, w, h, d, col) {
+          const [X, Z] = P(x, z);
+          S.put("tri", true, col, X, oy + y * sc, Z, w * sc, h * sc, d * sc, ry);
+        },
+        oct(x, y, z, r, h, col) {
+          const [X, Z] = P(x, z);
+          S.put("oct", true, col, X, oy + y * sc, Z, r * sc, h * sc, r * sc, Math.PI / 8);
+        },
+      };
+    };
+
+    /* ---------- 光線（暖色午後）、霧 ---------- */
+    const hemi = new T.HemisphereLight(0xffffff, 0xe8ddd0, 1.15);
+    const sun = new T.DirectionalLight(0xfff0dc, 1.35);
+    sun.position.set(-34, 58, 40);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 48, bottom: -48, near: 10, far: 200 });
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 0.03;
+    const amb = new T.AmbientLight(0xffd9a8, 0);
+    scene.add(hemi, sun, amb);
+    const fog = new T.Fog(0xf3ede2, 200, 420);
+    scene.fog = fog;
+    const L = {
+      hemiSky: [C("#ffffff"), C("#4a5f8a")],
+      hemiGnd: [C("#e8ddd0"), C("#1a1622")],
+      hemiI: [1.15, 0.7],
+      sunC: [C("#fff0dc"), C("#8fa8e0")],
+      sunI: [1.35, 0.25],
+      fog: [C("#f3ede2"), C("#121626")],
+    };
+
+    /* ---------- 貼圖：紅磚鋪面、石板步道 ---------- */
+    const mkTex = (draw, size = 256) => {
+      const c = document.createElement("canvas");
+      c.width = c.height = size;
+      draw(c.getContext("2d"), size);
+      const t = new T.CanvasTexture(c);
+      t.wrapS = t.wrapT = T.RepeatWrapping;
+      t.anisotropy = 4;
+      return t;
+    };
+    const brickTex = mkTex((g, n) => {
+      g.fillStyle = "#c9a593";
+      g.fillRect(0, 0, n, n);
+      const bh = 32,
+        bw = 64;
+      for (let r = 0; r < n / bh; r++)
+        for (let c = -1; c < n / bw + 1; c++) {
+          const x = c * bw + (r % 2 ? bw / 2 : 0);
+          g.fillStyle = ["#b8735c", "#b06b55", "#bd7c63", "#a96751", "#c08467"][(r * 7 + c * 3 + 20) % 5];
+          g.fillRect(x + 2, r * bh + 2, bw - 4, bh - 4);
+        }
+    });
+    const stoneTex = mkTex((g, n) => {
+      g.fillStyle = "#c9c6bf";
+      g.fillRect(0, 0, n, n);
+      for (let r = 0; r < 4; r++)
+        for (let c = 0; c < 2; c++) {
+          g.fillStyle = ["#dcd9d2", "#d5d2ca", "#e1ded7", "#d0cdc5"][(r + c * 3) % 4];
+          g.fillRect(c * 128 + 2, r * 64 + 2, 124, 60);
+        }
+    });
+    const texMats = [];
+    const slab = (tex, w, d, x, y, z, rep, h = 0.06, side) => {
+      const t = tex.clone();
+      t.needsUpdate = true;
+      t.repeat.set(w / rep, d / rep);
+      const m = new T.MeshLambertMaterial({ color: "#ffffff", map: t });
+      texMats.push(m);
+      const mats = side ? [side, side, m, side, side, side] : m;
+      const mesh = new T.Mesh(new T.BoxGeometry(w, h, d), mats);
+      mesh.position.set(x, y, z);
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      return mesh;
+    };
+    const baseSide = new T.MeshLambertMaterial({ color: "#d9d3c7" });
+    texMats.push(baseSide);
+    const GW = HW * 2 + 26,
+      GD = DC + 46;
+    slab(stoneTex, GW, GD, 0, -0.7, -4, 3.2, 1.4, baseSide); // 基座與外圍人行道
+    slab(brickTex, HW * 2, DC + 1, 0, 0.03, 0, 1.6); // 廣場紅磚
+    slab(stoneTex, WK, DC + 16, 0, 0.06, 7.5, 2.6); // 中央石板步道（延伸出大門）
+
+    const site = mkStamp();
+    const F = frame(site, 0, 0, 0);
+
+    /* ---------- 紅磚圍牆、大門、樹籬 ---------- */
+    const wall = (x0, x1, z, along = "x") => {
+      const len = Math.abs(x1 - x0),
+        mid = (x0 + x1) / 2;
+      if (along === "x") {
+        F.box(mid, 0.75, z, len, 1.5, 0.45, K.brick);
+        F.box(mid, 1.55, z, len + 0.1, 0.12, 0.6, K.stone);
+        for (let x = Math.min(x0, x1); x <= Math.max(x0, x1) + 0.01; x += 4.2) {
+          F.box(x, 1.0, z, 0.75, 2.0, 0.75, K.brickD);
+          F.box(x, 2.08, z, 0.9, 0.16, 0.9, K.stone);
+          F.pyr(x, 2.32, z, 0.8, 0.35, K.stone);
+        }
+      } else {
+        F.box(z, 0.75, mid, 0.45, 1.5, len, K.brick);
+        F.box(z, 1.55, mid, 0.6, 0.12, len + 0.1, K.stone);
+        for (let x = Math.min(x0, x1); x <= Math.max(x0, x1) + 0.01; x += 4.2) {
+          F.box(z, 1.0, x, 0.75, 2.0, 0.75, K.brickD);
+          F.box(z, 2.08, x, 0.9, 0.16, 0.9, K.stone);
+          F.pyr(z, 2.32, x, 0.8, 0.35, K.stone);
+        }
+      }
+    };
+    const G2 = WK / 2 + 0.6;
+    wall(-HW, -G2, ZF);
+    wall(G2, HW, ZF);
+    // 兩側牆（留一個側門）
+    const sideWall = (x) => {
+      const segs = [[ZF, ZF - 9], [ZF - 13, ZB + 1]];
+      segs.forEach(([a, b]) => {
+        const len = a - b,
+          mid = (a + b) / 2;
+        F.box(x, 0.75, mid, 0.45, 1.5, len, K.brick);
+        F.box(x, 1.55, mid, 0.6, 0.12, len + 0.1, K.stone);
+        for (let z = b; z <= a + 0.01; z += 4.2) {
+          F.box(x, 1.0, z, 0.75, 2.0, 0.75, K.brickD);
+          F.box(x, 2.08, z, 0.9, 0.16, 0.9, K.stone);
+          F.pyr(x, 2.32, z, 0.8, 0.35, K.stone);
+        }
+      });
+    };
+    sideWall(-HW);
+    sideWall(HW);
+    // 大門鐵門（打開）
+    for (const sx of [-1, 1]) {
+      F.box(sx * (G2 + 0.1), 1.4, ZF, 0.95, 2.8, 0.95, K.brickD);
+      F.box(sx * (G2 + 0.1), 2.9, ZF, 1.1, 0.2, 1.1, K.stone);
+      F.pyr(sx * (G2 + 0.1), 3.2, ZF, 1.0, 0.45, K.stone);
+      const gx = sx * (G2 - 0.3),
+        gz = ZF - 1.1;
+      F.box(gx, 1.15, gz, 0.06, 2.1, 2.2, K.frame, true, sx * 0.25);
+      for (let k = 0; k < 6; k++) F.box(gx - sx * 0.02, 1.15, gz - 0.95 + k * 0.38, 0.05, 2.0, 0.05, K.frame);
+    }
+    // 牆外樹籬
+    for (const sx of [-1, 1])
+      for (let x = G2 + 2.5; x < HW - 1; x += 5.2) {
+        F.box(sx * x, 0.35, ZF + 1.6, 4.4, 0.7, 1.3, K.stone);
+        for (let k = 0; k < 4; k++) F.ball(sx * x - 1.6 + k * 1.05, 0.95, ZF + 1.6, 0.62, k % 2 ? K.hedge : K.leaf3, 0.75);
+      }
+
+    /* ---------- 樹（low poly 榕樹與一般樹）---------- */
+    const tree = (x, z, s = 1, big = false) => {
+      F.cyl(x, 1.4 * s, z, (big ? 0.55 : 0.25) * s, 2.8 * s, K.trunk);
+      if (big) {
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2;
+          F.cyl(x + Math.cos(a) * 1.4 * s, 1.6 * s, z + Math.sin(a) * 1.4 * s, 0.07 * s, 3.2 * s, K.trunk);
+        }
+        [[0, 4.4, 0, 2.6], [1.9, 3.9, 0.6, 2.0], [-1.8, 4.0, -0.4, 2.1], [0.5, 4.2, -1.8, 1.9], [-0.6, 4.1, 1.8, 1.9], [0, 5.6, 0, 1.8]].forEach(([dx, y, dz, r], k) =>
+          F.ball(x + dx * s, y * s, z + dz * s, r * s, [K.leaf, K.leaf2, K.leaf3][k % 3], 0.8),
+        );
+      } else {
+        F.ball(x, 3.2 * s, z, 1.5 * s, K.leaf, 0.9);
+        F.ball(x + 0.7 * s, 3.9 * s, z - 0.3 * s, 1.0 * s, K.leaf2);
+        F.ball(x - 0.6 * s, 3.7 * s, z + 0.4 * s, 0.9 * s, K.leaf3);
+      }
+    };
+    // 八角形花台＋大榕樹（後方兩角）
+    const bigTree = (x, z) => {
+      F.oct(x, 0.3, z, 3.4, 0.6, K.stone);
+      F.oct(x, 0.62, z, 3.0, 0.06, K.soil);
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2 + Math.PI / 8;
+        F.box(x + Math.cos(a) * 3.65, 0.42, z + Math.sin(a) * 3.65, 2.6, 0.12, 0.7, K.woodL, true, -a + Math.PI / 2);
+      }
+      tree(x, z, 1.25, true);
+    };
+    bigTree(-HW + 5.5, ZB + 5.5);
+    bigTree(HW - 5.5, ZB + 5.5);
+    tree(-HW - 4, ZF + 3.5, 1.3);
+    tree(HW + 4, ZF + 3.5, 1.3);
+    for (let z = ZF - 6; z > ZB; z -= 9) {
+      tree(-HW - 5.5, z, 1.1);
+      tree(HW + 5.5, z - 3, 1.05);
+    }
+
+    /* ---------- 主館：老紅磚倉庫（三個山牆）＋兩側廠房 ---------- */
+    const HD = 13,
+      HZ = ZB - HD / 2 - 0.5,
+      HWd = Math.min(HW * 2 + 4, 44);
+    const nG = 3,
+      gw = HWd / nG;
+    F.box(0, 0.25, HZ, HWd + 1, 0.5, HD + 1, K.stone);
+    for (let k = 0; k < nG; k++) {
+      const cx = -HWd / 2 + gw * (k + 0.5);
+      F.box(cx, 3.5, HZ, gw, 6.5, HD, K.brick);
+      // 山牆＋雙斜屋頂（三角柱）
+      F.tri(cx, 6.75, HZ + HD / 2 - 0.25, gw - 0.2, 3.8, 0.5, K.brick);
+      F.tri(cx, 6.75, HZ, gw + 0.5, 4.2, HD - 0.6, K.roof);
+      F.box(cx, 6.85, HZ, gw + 0.6, 0.2, HD + 0.2, K.stone);
+      // 圓窗、拱窗
+      site.put("cyl", true, K.stone, cx, 8.2, HZ + HD / 2 + 0.05, 0.6, 0.12, 0.6, 0, 0, Math.PI / 2);
+      site.put("cyl", false, K.win, cx, 8.2, HZ + HD / 2 + 0.12, 0.42, 0.08, 0.42, 0, 0, Math.PI / 2);
+      for (const wx of [-gw * 0.28, gw * 0.28]) {
+        if (k === 1) continue;
+        F.box(cx + wx, 3.2, HZ + HD / 2 + 0.06, 2.0, 3.0, 0.12, K.frame);
+        site.put("box", false, K.win, cx + wx, 3.2, HZ + HD / 2 + 0.14, 1.8, 2.8, 0.04);
+        F.box(cx + wx, 4.85, HZ + HD / 2 + 0.06, 2.2, 0.3, 0.2, K.stone);
+        for (let m = -1; m <= 1; m += 2) F.box(cx + wx + m * 0.45, 3.2, HZ + HD / 2 + 0.17, 0.06, 2.8, 0.05, K.frame);
+        F.box(cx + wx, 3.2, HZ + HD / 2 + 0.17, 1.8, 0.06, 0.05, K.frame);
+      }
+      if (k === 1) {
+        // 大拱門入口
+        F.box(cx, 2.6, HZ + HD / 2 + 0.06, 5.2, 4.6, 0.14, K.frame);
+        site.put("box", false, K.win, cx, 2.5, HZ + HD / 2 + 0.15, 4.9, 4.4, 0.04);
+        F.box(cx, 5.1, HZ + HD / 2 + 0.08, 5.8, 0.4, 0.3, K.stone);
+        for (let m = -2; m <= 2; m++) F.box(cx + m * 1.0, 2.5, HZ + HD / 2 + 0.18, 0.07, 4.4, 0.05, K.frame);
+      }
+      for (const px of [-gw / 2, gw / 2]) F.box(cx + px, 3.5, HZ + HD / 2 + 0.15, 0.5, 6.5, 0.3, K.brickD);
+    }
+    // 兩側廠房
+    for (const sx of [-1, 1]) {
+      const x = sx * (HW + 8),
+        L = Math.min(DC * 0.55, 30),
+        z = ZB + L / 2 + 1;
+      F.box(x, 2.1, z, 7, 4.2, L, K.brick);
+      F.tri(x, 4.2, z, 7.8, 2.2, L + 0.6, K.roof);
+      for (let k = 0; k < Math.floor(L / 5); k++) {
+        const wz = z - L / 2 + 2.5 + k * 5;
+        F.box(x - sx * 3.52, 2.2, wz, 0.1, 2.2, 1.6, K.frame);
+        site.put("box", false, K.win, x - sx * 3.56, 2.2, wz, 0.04, 2.0, 1.4);
+      }
+    }
+
+    /* ---------- 餐車（主館前）---------- */
+    const truck = (x, z, col, ry) => {
+      const TF = frame(site, x, 0, z, ry);
+      TF.box(0, 1.35, 0, 4.2, 2.1, 2.0, col);
+      TF.box(-2.6, 1.0, 0, 1.2, 1.4, 1.9, col);
+      TF.box(-2.85, 1.45, 0, 0.6, 0.6, 1.7, K.glass);
+      TF.box(0.3, 1.5, 1.01, 2.6, 0.9, 0.04, K.dark);
+      TF.box(0.3, 1.05, 1.25, 2.8, 0.08, 0.5, K.woodL);
+      TF.box(0.3, 2.15, 1.45, 3.0, 0.08, 1.0, K.white, true, 0);
+      for (let k = 0; k < 5; k++) TF.box(-0.6 + k * 0.45, 1.18, 1.25, 0.3, 0.18, 0.3, K.ceramic[k % 5]);
+      for (const wx of [-2.4, 1.3]) for (const wz of [-1.0, 1.0]) TF.cyl(wx, 0.38, wz, 0.38, 0.25, K.dark);
+      TF.box(0, 2.48, 0, 4.0, 0.08, 1.9, K.white);
+    };
+    const tz = ZB + 5.5;
+    [-HW + 13, -6.2, 6.2, HW - 13].forEach((x, k) => truck(x, tz + (k % 2 ? 0.6 : 0), K.truck[k], 0));
+
+    /* ---------- 路燈（步道兩側）---------- */
+    const lamps = [];
+    for (let z = ZF - 4; z > ZB + 8; z -= 11)
+      for (const sx of [-1, 1]) {
+        F.cyl(sx * (WK / 2 + 0.5), 1.8, z, 0.07, 3.6, K.metal);
+        F.box(sx * (WK / 2 + 0.5), 3.7, z, 0.45, 0.3, 0.45, K.metal);
+        site.put("box", false, K.lamp, sx * (WK / 2 + 0.5), 3.6, z, 0.36, 0.26, 0.36);
+      }
+
+    /* ---------- 攤位 ---------- */
+    const GOODS = {
+      pottery(TF, A) {
+        for (let k = 0; k < 6; k++) TF.cyl(-1.1 + k * 0.44, 0.92, -0.1 + (k % 2) * 0.25, 0.17, 0.2, K.ceramic[k % 5]);
+        TF.box(0, 1.4, -1.25, 2.6, 0.06, 0.4, K.woodL);
+        for (let k = 0; k < 5; k++) TF.cone(-1.0 + k * 0.5, 1.6, -1.25, 0.13, 0.32, K.ceramic[(k + 2) % 5]);
+      },
+      art(TF, A) {
+        for (const x of [-0.8, 0.6]) {
+          TF.box(x, 1.55, -0.7, 0.9, 1.2, 0.06, K.wood);
+          TF.box(x, 1.55, -0.66, 0.78, 1.06, 0.03, K.art[x > 0 ? 1 : 0]);
+          TF.box(x, 0.85, -0.55, 0.05, 1.7, 0.05, K.wood, true, 0, 0.2);
+        }
+        for (let k = 0; k < 4; k++) TF.box(-1.0 + k * 0.6, 0.86, 0.15, 0.42, 0.04, 0.32, K.art[k]);
+      },
+      bags(TF, A) {
+        TF.box(0, 1.9, -1.2, 2.8, 0.05, 0.05, K.metal);
+        for (let k = 0; k < 4; k++) {
+          TF.box(-1.05 + k * 0.7, 1.45, -1.2, 0.5, 0.65, 0.06, K.bag);
+          TF.box(-1.05 + k * 0.7, 1.82, -1.2, 0.3, 0.2, 0.02, K.dark);
+        }
+        for (let k = 0; k < 3; k++) TF.box(-0.6 + k * 0.6, 0.9, 0.1, 0.45, 0.12, 0.35, K.bag);
+      },
+      plants(TF, A) {
+        for (let k = 0; k < 5; k++) {
+          TF.cone(-1.1 + k * 0.55, 0.92, 0.1, 0.16, 0.22, K.pot);
+          TF.ball(-1.1 + k * 0.55, 1.15, 0.1, 0.22, k % 2 ? K.leaf : K.leaf2);
+        }
+        for (let k = 0; k < 3; k++) {
+          TF.cone(-1.0 + k * 1.0, 0.25, -1.35, 0.26, 0.5, K.pot);
+          TF.ball(-1.0 + k * 1.0, 0.85, -1.35, 0.5, k % 2 ? K.leaf3 : K.leaf, 1.2);
+        }
+      },
+      cards(TF, A) {
+        TF.box(0, 1.25, -0.3, 2.4, 0.9, 0.05, K.wood, true, 0, 0);
+        for (let r = 0; r < 2; r++) for (let k = 0; k < 5; k++) TF.box(-0.95 + k * 0.48, 1.05 + r * 0.42, -0.26, 0.32, 0.36, 0.02, k % 2 ? K.paper : K.art[(k + r) % 4]);
+        for (let k = 0; k < 4; k++) TF.box(-0.9 + k * 0.6, 0.86, 0.25, 0.35, 0.05, 0.25, K.paper);
+      },
+      books(TF, A) {
+        for (let k = 0; k < 4; k++) for (let j = 0; j < 3; j++) TF.box(-1.0 + k * 0.65, 0.86 + j * 0.06, 0.05, 0.5, 0.05, 0.36, j % 2 ? K.art[k] : K.paper);
+        TF.box(0, 1.2, -1.3, 2.6, 1.4, 0.4, K.wood);
+        for (let r = 0; r < 2; r++) for (let k = 0; k < 8; k++) TF.box(-1.1 + k * 0.31, 0.8 + r * 0.55, -1.15, 0.22, 0.36, 0.25, K.art[(k + r) % 4]);
+      },
+      cafe(TF, A) {
+        TF.box(0.7, 1.05, 0.0, 0.5, 0.35, 0.4, K.metal);
+        TF.cyl(0.7, 1.32, 0.0, 0.12, 0.2, K.dark);
+        for (let k = 0; k < 5; k++) TF.cyl(-1.1 + k * 0.3, 0.92, 0.15, 0.09, 0.2, K.paper);
+        TF.box(-0.6, 1.6, -1.0, 1.4, 0.8, 0.05, K.dark);
+        TF.box(-0.6, 1.6, -0.97, 1.25, 0.65, 0.02, K.paper);
+      },
+      tech(TF, A) {
+        for (const x of [-0.8, 0.4]) {
+          TF.box(x, 1.18, -0.2, 0.9, 0.55, 0.06, K.dark, true, 0, 0);
+          TF.box(x, 1.18, -0.16, 0.8, 0.45, 0.02, A.scr, false);
+          TF.box(x, 0.88, 0.05, 0.6, 0.03, 0.3, K.metal);
+        }
+        TF.box(1.15, 0.95, 0.1, 0.35, 0.2, 0.25, K.white);
+        TF.box(0, 1.85, -1.3, 1.8, 0.9, 0.06, K.white);
+        TF.box(0, 1.85, -1.26, 1.6, 0.7, 0.02, A.scr, false);
+      },
+      desk(TF, A) {
+        TF.box(0, 1.6, -1.2, 2.0, 0.9, 0.06, K.white);
+        TF.box(0, 1.6, -1.16, 1.8, 0.4, 0.02, A.acc);
+        for (let k = 0; k < 3; k++) TF.box(-0.7 + k * 0.7, 0.88, 0.1, 0.4, 0.06, 0.3, K.paper);
+        TF.box(0.9, 0.95, -0.2, 0.3, 0.2, 0.3, K.ceramic[1]);
+        TF.box(-1.6, 0.75, 0.9, 0.5, 1.5, 0.08, K.wood, true, 0.3);
+        TF.box(-1.6, 1.2, 0.95, 0.42, 0.6, 0.03, K.paper, true, 0.3);
+      },
+    };
+    const RULES = [
+      ["tech", /系統|網路|AI|電腦|資安|平台|雲端|數位|軟體|自動化|程式|網站|App|帳號/i],
+      ["desk", /諮詢|服務|窗口|客服|申請|協助|報修|問答|中心|小幫手/],
+      ["books", /書|教學|課程|閱讀|學習|講座|研習|圖書/],
+      ["cards", /卡|文件|表單|公文|證明|明信片|資料|簽核/],
+      ["plants", /植|綠|環境|永續|花|園藝|生態/],
+      ["pottery", /陶|瓷|手作|工藝|杯|碗/],
+      ["art", /畫|藝術|設計|展|攝影|美/],
+      ["bags", /袋|包|文創|周邊|紀念/],
+      ["cafe", /咖啡|茶|飲|食|餐|甜點/],
+    ];
+    const ORDER = ["pottery", "art", "plants", "cards", "bags", "books", "cafe", "tech", "desk"];
+    const goodsOf = (ent, used, base) => {
+      const txt = (ent.name || "") + " " + (ent.highlight || "");
+      for (const [t, re] of RULES) if (re.test(txt) && !used.includes(t)) return t;
+      for (let k = 0; k < ORDER.length; k++) {
+        const t = ORDER[(base + k) % ORDER.length];
+        if (!used.includes(t)) return t;
+      }
+      return ORDER[base % ORDER.length];
+    };
+
+    /* 帳篷：白色金字塔頂、垂邊、四根柱、鋪布的桌子；垂邊上一條分類色（低彩度）*/
+    const tent = (x, z, A) => {
+      const TF = frame(site, x, 0, z, 0);
+      TF.pyr(0, 2.95, 0, TW + 0.15, 0.95, K.canvas);
+      for (const [dx, dz, w, d] of [[0, TDP / 2, TW, 0.04], [0, -TDP / 2, TW, 0.04], [TW / 2, 0, 0.04, TDP], [-TW / 2, 0, 0.04, TDP]]) TF.box(dx, 2.33, dz, w + 0.04, 0.32, d + 0.04, K.canvas);
+      TF.box(0, 2.21, TDP / 2 + 0.03, TW, 0.07, 0.02, A.trim);
+      for (const dx of [-TW / 2 + 0.05, TW / 2 - 0.05]) for (const dz of [-TDP / 2 + 0.05, TDP / 2 - 0.05]) TF.cyl(dx, 1.1, dz, 0.035, 2.2, K.metal);
+      TF.box(0, 0.42, 0.15, 2.7, 0.82, 0.85, K.cloth);
+      TF.box(0, 0.84, 0.15, 2.8, 0.03, 0.95, K.cloth);
+      return TF;
+    };
+
+    /* ---------- 分區與攤位 ---------- */
+    const blocks = [],
+      fillers = [],
+      items = {},
+      anchors = {},
+      pickables = [],
+      IP = [],
+      isl = [];
+    const SCRp = pal("#9fd3ea", "#8fe0ff");
+    cats.forEach((cat, i) => {
+      const c = blockC(i),
+        col = colorOf(cat.id);
+      const A = {
+        trim: palC(neon(col, 0.62, 0.25), neon(col, 0.3, 0.25)),
+        acc: palC(neon(col, 0.72, 0.22), neon(col, 0.3, 0.22)),
+        scr: SCRp,
+      };
+      const ents = data.entities.filter((e) => e.cat === cat.id).slice(0, MAXI);
+      const n = ents.length,
+        front = n <= 3 ? n : Math.ceil(n / 2),
+        rows = rowsOf(n),
+        pr = perRow(n);
+      const used = [];
+      const rowZ = (row) => c.z + (rows === 1 ? 0 : row === 0 ? ROWP / 2 : -ROWP / 2) - 0.6;
+      const slotX = (j) => c.x + (j - (pr - 1) / 2) * PX;
+      // 前排不足 3 頂：補上裝飾帳篷（沒有分類色帶，點了會進到這一區）
+      for (let j = front; j < pr; j++) {
+        const x = slotX(j),
+          z = rowZ(0);
+        const TF = tent(x, z, { trim: K.canvas });
+        GOODS[pick(["pottery", "plants", "art", "bags", "cafe"])](TF, A);
+        fillers.push({ x, z, block: i });
+      }
+      ents.forEach((ent, k) => {
+        const row = k < front ? 0 : 1,
+          j = row === 0 ? k : k - front;
+        const x = slotX(j),
+          z = rowZ(row);
+        const TF = tent(x, z, A);
+        const g = goodsOf(ent, used, i + k);
+        used.push(g);
+        GOODS[g](TF, A);
+        const hit = new T.Mesh(new T.BoxGeometry(TW, 3.2, TDP), new T.MeshBasicMaterial({ visible: false }));
+        hit.position.set(x, 1.6, z);
+        hit.userData.eid = ent.id;
+        scene.add(hit);
+        pickables.push(hit);
+        const an = new T.Object3D();
+        an.position.set(x, 3.9, z);
+        scene.add(an);
+        anchors[ent.id] = an;
+        items[ent.id] = { x, z, block: i, goods: g, front: z + TDP / 2, hit };
+      });
+      // 分區立牌（看板＋細柱）
+      const sx = c.x + (c.x <= 0 ? BW / 2 + 0.9 : -BW / 2 - 0.9),
+        sz = rowZ(0) + TDP / 2 + 0.6;
+      F.cyl(sx, 1.2, sz, 0.05, 2.4, K.frame);
+      F.box(sx, 2.35, sz, 1.4, 0.6, 0.06, K.white);
+      F.box(sx, 2.35, sz + 0.04, 1.2, 0.12, 0.02, A.trim);
+      // 點分區的範圍（整區地面）
+      const bp = new T.Mesh(new T.BoxGeometry(BW + 1.6, 3.2, rows * ROWP + 0.4), new T.MeshBasicMaterial({ visible: false }));
+      bp.position.set(c.x, 1.6, c.z - 0.4);
+      bp.userData.isl = i;
+      scene.add(bp);
+      IP.push(bp);
+      blocks.push({ i, c, n, rows, sign: V3(c.x, 4.5, rowZ(0)), tagC: neon(col, 0.5, 0.22), ents });
+      isl.push({ c: c.clone() });
+    });
+
+    /* ---------- 夜晚串燈（帳篷列之間）---------- */
+    const bulbs = mkStamp(),
+      cable = [];
+    blocks.forEach((b) => {
+      const rows = b.rows === 1 ? [b.c.z - 0.6 + TDP / 2 + 0.2] : [b.c.z + ROWP / 2 - 0.6 + TDP / 2 + 0.2, b.c.z - ROWP / 2 - 0.6 + TDP / 2 + 0.2];
+      rows.forEach((z) => {
+        const x0 = b.c.x - BW / 2,
+          x1 = b.c.x + BW / 2;
+        for (let k = 0; k <= 16; k++) {
+          const t = k / 16,
+            x = x0 + (x1 - x0) * t,
+            y = 2.18 - 0.22 * Math.sin(((t * 3) % 1) * Math.PI);
+          bulbs.put("sph", false, K.bulb, x, y, z, 0.07, 0.07, 0.07);
+        }
+        cable.push([x0, 2.25, z, x1, 2.25, z]);
+      });
+    });
+    // 步道上方的串燈（之字）
+    for (let z = ZF - 3; z > ZB + 4; z -= 4)
+      for (let k = 0; k <= 10; k++) {
+        const t = k / 10;
+        bulbs.put("sph", false, K.bulb, -WK / 2 - 0.5 + (WK + 1) * t, 3.3 - 0.4 * Math.sin(t * Math.PI), z - t * 2, 0.07, 0.07, 0.07);
+      }
+    realize(site, scene);
+    const bulbRec = realize(bulbs, scene, false);
+
+    /* ---------- 人：攤主、看攤的人、逛街的人（共用人群模組，每幀更新）---------- */
+    const loops = [];
+    const rect = (x0, z0, x1, z1) => [V3(x0, 0, z0), V3(x1, 0, z0), V3(x1, 0, z1), V3(x0, 0, z1), V3(x0, 0, z0)];
+    blocks.forEach((b) => {
+      const hw = BW / 2 + 1.1,
+        hd = (b.rows * ROWP) / 2 + 0.9;
+      loops.push(rect(b.c.x - hw, b.c.z - hd, b.c.x + hw, b.c.z + hd));
+    });
+    loops.push(rect(-HW + 1.6, ZB + 10, HW - 1.6, ZF - 2.2));
+    loops.push([V3(-1.1, 0, ZF + 6), V3(-1.1, 0, ZB + 3), V3(1.1, 0, ZB + 3), V3(1.1, 0, ZF + 6), V3(-1.1, 0, ZF + 6)]);
+    // 平視時：站在鏡頭與攤位之間（或離鏡頭很近）的人會擋住畫面
+    const blocksView = (x, z, cam) => {
+      const ax = cam.position.x,
+        az = cam.position.z;
+      const tt = window.__tour && window.__tour.controls ? window.__tour.controls.target : V3(0, 0, 0);
+      const bx = tt.x - ax,
+        bz = tt.z - az,
+        L2 = bx * bx + bz * bz || 1;
+      const u = Math.max(0, Math.min(1, ((x - ax) * bx + (z - az) * bz) / L2));
+      const dx = ax + bx * u - x,
+        dz = az + bz * u - z;
+      return dx * dx + dz * dz < 1.1 * 1.1 || Math.hypot(x - ax, z - az) < 2.2;
+    };
+    const crowd = mkCrowd(T, scene, {
+      scale: 1,
+      rnd,
+      reduce,
+      loops,
+      pal: { skin: K.skin, hair: K.hair, shirt: K.shirt, pants: K.pants, bag: [K.bag, K.dark, K.woodL], tights: [K.dark, pal("#4a4440")] },
+      adjust(p, dt) {
+        if (!p.stall) return;
+        // 鏡頭聚焦這個攤位時，攤前的人往兩側讓開
+        p.x0 === undefined && (p.x0 = p.x);
+        p.aside += ((p.stall === focusId ? 1 : 0) - p.aside) * Math.min(1, dt * 2.5);
+        const it = items[p.stall];
+        p.x = p.x0 + Math.sign(p.x0 - it.x || 1) * 2.0 * p.aside;
+      },
+      hide: (p, cam) => cam && cam.position.y < 4 && blocksView(p.x, p.z, cam),
+    });
+    const mkPerson = (kind, opt) => crowd.add(kind, opt);
+    // 攤主（站在桌後）
+    Object.values(items).forEach((it) => mkPerson("vendor", { x: it.x + (rnd() - 0.5) * 0.8, z: it.z - 0.75, ry: 0 }));
+    // 看攤的人（站在攤前）
+    Object.entries(items).forEach(([id, it]) => {
+      const m = 1 + Math.floor(rnd() * 2);
+      for (let k = 0; k < m; k++) mkPerson("browse", { stall: id, x: it.x + (rnd() - 0.5) * 2.2, z: it.front + 0.7 + rnd() * 0.5, ry: Math.PI + (rnd() - 0.5) * 0.6, aside: 0 });
+    });
+    fillers.forEach((it) => mkPerson("browse", { x: it.x + (rnd() - 0.5) * 2, z: it.z + TDP / 2 + 0.8, ry: Math.PI + (rnd() - 0.5) * 0.6 }));
+    // 餐車前排隊
+    [-HW + 13, -6.2, 6.2, HW - 13].forEach((x) => {
+      for (let k = 0; k < 2; k++) mkPerson("browse", { x: x + 0.3 + (rnd() - 0.5), z: tz + 2.3 + k * 0.8, ry: Math.PI });
+    });
+    // 逛街的人：沿路線走
+    const WALKERS = Math.min(70, 22 + N * 7);
+    for (let k = 0; k < WALKERS; k++) {
+      const li = k < WALKERS * 0.25 ? loops.length - 1 - (k % 2) : k % loops.length;
+      mkPerson("walk", { loop: li, s: rnd() * crowd.loopLen[li].L, v: (0.75 + rnd() * 0.5) * (rnd() < 0.5 ? 1 : -1), off: (rnd() - 0.5) * 1.1 });
+    }
+    crowd.finalize(MAT.lit, themed);
+    crowd.draw(0, 0, null);
+
+    /* ---------- 天上的飛鳥（幾群繞圈、拍翅膀）---------- */
+    const FL = [],
+      NB = 14;
+    for (let k = 0; k < NB; k++) FL.push({ g: k % 3, a: rnd() * 6.28, r: 8 + rnd() * 6, y: 15 + rnd() * 6, sp: 0.18 + rnd() * 0.08, ph: rnd() * 6, dx: (rnd() - 0.5) * 3, dz: (rnd() - 0.5) * 3 });
+    const flockC = [V3(-HW * 0.4, 0, -DC * 0.15), V3(HW * 0.5, 0, DC * 0.1), V3(0, 0, -DC * 0.35)];
+    const birdMat = new T.MeshLambertMaterial({ color: "#4a4f57", flatShading: true });
+    const birdBody = new T.InstancedMesh(UNIT.box, birdMat, NB),
+      birdWing = new T.InstancedMesh(UNIT.box, birdMat, NB * 2);
+    [birdBody, birdWing].forEach((im) => {
+      im.frustumCulled = false;
+      im.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      scene.add(im);
+    });
+    const bm = new T.Matrix4(),
+      bq = new T.Quaternion(),
+      be = new T.Euler(),
+      bp = V3(0, 0, 0),
+      bs = V3(1, 1, 1),
+      bo = V3(0, 0, 0);
+    const setB = (im, i, x, y, z, sx, sy, sz, ry, rz, ox = 0) => {
+      be.set(0, ry, rz, "YZX");
+      bq.setFromEuler(be);
+      bo.set(ox, 0, 0).applyQuaternion(bq);
+      bp.set(x + bo.x, y + bo.y, z + bo.z);
+      bs.set(sx, sy, sz);
+      bm.compose(bp, bq, bs);
+      im.setMatrixAt(i, bm);
+    };
+    const drawBirds = (t) => {
+      FL.forEach((b, i) => {
+        const c = flockC[b.g],
+          a = b.a + t * b.sp;
+        const x = c.x + b.dx + Math.cos(a) * b.r,
+          z = c.z + b.dz + Math.sin(a) * b.r,
+          y = b.y + Math.sin(t * 0.7 + b.ph) * 0.6;
+        const ry = -a; // 沿圓周飛
+        const flap = reduce ? 0.2 : Math.sin(t * 9 + b.ph) * 0.65;
+        setB(birdBody, i, x, y, z, 0.16, 0.12, 0.42, ry, 0);
+        // 翅膀：以身體兩側為軸上下拍
+        setB(birdWing, i * 2, x, y, z, 0.5, 0.03, 0.2, ry, flap, -0.25);
+        setB(birdWing, i * 2 + 1, x, y, z, 0.5, 0.03, 0.2, ry, -flap, 0.25);
+      });
+      birdBody.instanceMatrix.needsUpdate = birdWing.instanceMatrix.needsUpdate = true;
+    };
+    drawBirds(0);
+
+    /* ---------- 路上的兩隻小貓（慢慢走、偶爾停下）---------- */
+    const catPath = [
+      [V3(-HW + 2.2, 0, ZF - 3), V3(-HW + 2.2, 0, ZB + 12), V3(-WK / 2 - 0.6, 0, ZB + 12), V3(-WK / 2 - 0.6, 0, ZF - 3), V3(-HW + 2.2, 0, ZF - 3)],
+      [V3(HW - 2.4, 0, ZB + 11), V3(HW - 2.4, 0, ZF - 4), V3(WK / 2 + 0.7, 0, ZF - 4), V3(WK / 2 + 0.7, 0, ZB + 11), V3(HW - 2.4, 0, ZB + 11)],
+    ];
+    const catLen = catPath.map((pts) => {
+      let L = 0;
+      const seg = [];
+      for (let k = 1; k < pts.length; k++) seg.push(pts[k].distanceTo(pts[k - 1])), (L += seg[seg.length - 1]);
+      return { L, seg };
+    });
+    const cats2 = [
+      { li: 0, s: 3, col: pal("#d79a62", "#5a4130"), ph: 0 },
+      { li: 1, s: 10, col: pal("#8e9196", "#3b3d42"), ph: 2 },
+    ];
+    const catMats = new T.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+    const catIM = new T.InstancedMesh(UNIT.box, catMats, cats2.length * 9);
+    catIM.frustumCulled = false;
+    catIM.castShadow = true;
+    catIM.instanceMatrix.setUsage(T.DynamicDrawUsage);
+    scene.add(catIM);
+    const catCols = [];
+    cats2.forEach((c) => {
+      for (let k = 0; k < 9; k++) catCols.push(k === 8 ? pal("#f3efe8", "#6a6560") : c.col);
+    });
+    catCols.forEach((c, q) => catIM.setColorAt(q, c.d));
+    catIM.instanceColor.needsUpdate = true;
+    themed.push({ im: catIM, cols: catCols });
+    const cv = V3(0, 0, 0);
+    const catAt = (li, s) => {
+      const pts = catPath[li],
+        { L, seg } = catLen[li];
+      s = ((s % L) + L) % L;
+      for (let k = 0; k < seg.length; k++) {
+        if (s <= seg[k]) {
+          const a = pts[k],
+            b = pts[k + 1],
+            t = s / seg[k];
+          cv.set(a.x + (b.x - a.x) * t, 0, a.z + (b.z - a.z) * t);
+          return Math.atan2(b.x - a.x, b.z - a.z);
+        }
+        s -= seg[k];
+      }
+      cv.copy(pts[0]);
+      return 0;
+    };
+    const ce = new T.Euler(),
+      cq = new T.Quaternion(),
+      cm = new T.Matrix4(),
+      cp = V3(0, 0, 0),
+      cs = V3(1, 1, 1),
+      co = V3(0, 0, 0);
+    const putCat = (i, x, z, ry, lx, ly, lz, sx, sy, sz, rx = 0) => {
+      ce.set(rx, ry, 0, "YXZ");
+      cq.setFromEuler(ce);
+      co.set(lx, ly, lz).applyQuaternion(new T.Quaternion().setFromEuler(new T.Euler(0, ry, 0)));
+      cp.set(x + co.x, co.y, z + co.z);
+      cs.set(sx, sy, sz);
+      cm.compose(cp, cq, cs);
+      catIM.setMatrixAt(i, cm);
+    };
+    const drawCats = (t, dt) => {
+      cats2.forEach((c, n) => {
+        const go = reduce ? 0 : Math.max(0, Math.sin(t * 0.25 + c.ph)); // 走一陣、停一陣
+        c.s += 0.45 * go * dt;
+        const ry = catAt(c.li, c.s),
+          x = cv.x,
+          z = cv.z,
+          sw = Math.sin(t * 9 + c.ph) * 0.5 * Math.min(1, go * 3),
+          b = n * 9;
+        putCat(b, x, z, ry, 0, 0.32, 0, 0.24, 0.22, 0.55); // 身體
+        putCat(b + 1, x, z, ry, 0, 0.47, 0.34, 0.22, 0.2, 0.2); // 頭
+        putCat(b + 2, x, z, ry, -0.07, 0.6, 0.36, 0.06, 0.08, 0.04); // 耳
+        putCat(b + 3, x, z, ry, 0.07, 0.6, 0.36, 0.06, 0.08, 0.04);
+        putCat(b + 4, x, z, ry, 0, 0.5, -0.36, 0.05, 0.05, 0.35, -0.9 + Math.sin(t * 2 + c.ph) * 0.2); // 尾巴翹起
+        [[-0.08, 0.18], [0.08, -0.18]].forEach(([lx, lz], k) => {
+          putCat(b + 5 + k * 2, x, z, ry, lx, 0.12, lz, 0.06, 0.22, 0.06, sw * (k ? 1 : -1));
+          putCat(b + 6 + k * 2, x, z, ry, -lx, 0.12, lz, 0.06, 0.22, 0.06, -sw * (k ? 1 : -1));
+        });
+      });
+      catIM.instanceMatrix.needsUpdate = true;
+    };
+    drawCats(0, 0);
+
+    /* ---------- 光柱與攤位框線 ---------- */
+    const beamH = 3.4;
+    const beamMat = new T.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: T.NormalBlending,
+      side: T.DoubleSide,
+      uniforms: { uTime: { value: 0 }, uK: { value: 0 }, uCol: { value: new T.Color("#ffd58a") } },
+      vertexShader: "varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+      fragmentShader:
+        "varying vec2 vUv; uniform float uTime,uK; uniform vec3 uCol; void main(){ float fade=pow(1.0-vUv.y,1.6); float st=0.6+0.4*sin(vUv.y*20.0-uTime*3.0); gl_FragColor=vec4(uCol*(0.7+0.5*st), fade*0.4*uK); }",
+    });
+    const beam = new T.Mesh(new T.CylinderGeometry(1.8, 2.2, beamH, 32, 1, true).translate(0, beamH / 2, 0), beamMat);
+    beam.visible = false;
+    beam.renderOrder = 3;
+    scene.add(beam);
+    const ringMat = new T.MeshBasicMaterial({ color: "#ffd58a", transparent: true, opacity: 0, depthWrite: false });
+    const ring = new T.Mesh(new T.RingGeometry(2.2, 2.45, 48).rotateX(-Math.PI / 2), ringMat);
+    ring.visible = false;
+    scene.add(ring);
+
+    /* ---------- 日夜 ---------- */
+    let mix = 0;
+    const tc = new T.Color();
+    const setTheme = (m) => {
+      mix = m;
+      themed.forEach((r) => {
+        for (let k = 0; k < r.cols.length; k++) r.im.setColorAt(k, tc.copy(r.cols[k].d).lerp(r.cols[k].n, m));
+        r.im.instanceColor.needsUpdate = true;
+      });
+      hemi.color.copy(L.hemiSky[0]).lerp(L.hemiSky[1], m);
+      hemi.groundColor.copy(L.hemiGnd[0]).lerp(L.hemiGnd[1], m);
+      hemi.intensity = L.hemiI[0] + (L.hemiI[1] - L.hemiI[0]) * m;
+      sun.color.copy(L.sunC[0]).lerp(L.sunC[1], m);
+      sun.intensity = L.sunI[0] + (L.sunI[1] - L.sunI[0]) * m;
+      fog.color.copy(L.fog[0]).lerp(L.fog[1], m);
+      texMats.forEach((tm) => tm.color.set("#ffffff").lerp(C("#5a5866"), m));
+      amb.intensity = 0.85 * m;
+    };
+    setTheme(0);
+
+    /* ---------- 鏡頭 ---------- */
+    const TAN = Math.tan((40 * Math.PI) / 360);
+    const asp = () => innerWidth / Math.max(1, innerHeight);
+    const mobile = () => innerWidth <= 760;
+    const fit = (w, h) => Math.max(h / 2 / TAN, w / 2 / (TAN * asp()));
+    const fitPanel = (w, h) =>
+      mobile()
+        ? Math.max(h / 2 / (TAN * 0.54), w / 2 / (TAN * asp()))
+        : Math.max(h / 2 / TAN, w / 2 / (TAN * Math.max(0.5, (innerWidth - 360) / Math.max(1, innerHeight))));
+    const orbit = (c, d, az, el) => ({ pos: V3(c.x + Math.sin(az) * Math.cos(el) * d, c.y + Math.sin(el) * d, c.z + Math.cos(az) * Math.cos(el) * d), target: c.clone() });
+    const OV_EL = 0.6;
+    const ovPose = () => {
+      const pw = HW * 2 + 10,
+        ph = DC * Math.sin(OV_EL) + 14 + 10;
+      return orbit(V3(0, 0, -2), fit(pw, ph) * (mobile() ? 0.95 : 1.0), 0.12, OV_EL);
+    };
+    const blockPose = (i) => {
+      const b = blocks[i];
+      const tz = b.rows === 1 ? b.c.z - 0.2 : b.c.z;
+      return orbit(V3(b.c.x, 1.0, tz), fitPanel(BW + 8, b.rows * ROWP + 6) * 1.15, b.c.x < 0 ? -0.3 : b.c.x > 0 ? 0.3 : 0, 0.62);
+    };
+    // 攤位平視：鏡頭站在攤前走道（離攤位正面不超過 2.9，才不會被前一排帳篷擋住），沿走道往中央步道側退，看到整個攤面
+    const stallPose = (id) => {
+      const it = items[id];
+      const d = Math.max(5.2, fitPanel(mobile() ? 4.2 : 5.2, 3.8));
+      const az = Math.acos(Math.min(1, 2.9 / d)) * (it.x < 0 ? 1 : it.x > 0 ? -1 : 1);
+      const tgt = V3(it.x, 1.1, it.front - 0.4);
+      return { pos: V3(it.x + Math.sin(az) * d, 1.95, it.front - 0.4 + Math.cos(az) * d), target: tgt };
+    };
+    const R0 = Math.max(30, fit(HW * 2 + 10, DC) / 3);
+
+    /* ---------- 聚焦攤位的鏡頭動線 ---------- */
+    const TT = () => window.__tour;
+    let path = null,
+      lastEnt = null,
+      lastMode = "overview";
+    const ease = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+    // 拉近並轉到平視：水平位置平順前進，高度晚一點才降（先拉近、最後轉成平視），不會先貼近再後退
+    const startWalk = (id, cam, ctl) => {
+      const end = stallPose(id);
+      path = {
+        t0: performance.now(),
+        ms: (cam.position.y > 12 ? 2600 : 1700) / ((TT() && TT().S.speed) || 1),
+        P0: cam.position.clone(),
+        T0: ctl.target.clone(),
+        P1: end.pos,
+        T1: end.target,
+      };
+    };
+
+    /* ---------- 分區標籤（全景時顯示，可點）---------- */
+    const tagWrap = document.createElement("div");
+    tagWrap.id = "mtags";
+    document.body.appendChild(tagWrap);
+    const tags = blocks.map((b, i) => {
+      const el = document.createElement("button");
+      el.className = "mtag";
+      el.style.setProperty("--fc", "#" + b.tagC.getHexString());
+      el.innerHTML = "<i></i><span></span>";
+      el.querySelector("span").textContent = cats[i].name;
+      el.onclick = () => TT() && TT().focusIsland(i);
+      tagWrap.appendChild(el);
+      return el;
+    });
+    const pr = V3(0, 0, 0);
+    const layoutTags = (cam, show) => {
+      tagWrap.classList.toggle("off", !show);
+      if (!show) return;
+      blocks.forEach((b, i) => {
+        pr.copy(b.sign).project(cam);
+        tags[i].style.left = (((pr.x + 1) / 2) * innerWidth).toFixed(1) + "px";
+        tags[i].style.top = (((1 - pr.y) / 2) * innerHeight).toFixed(1) + "px";
+      });
+    };
+
+    /* ---------- 對外介面 ---------- */
+    const W = {
+      anchors,
+      pickables,
+      islandPicks: IP,
+      isl,
+      dynLabels: [],
+      noCatLabels: true,
+      agents: [],
+      pigeons: [],
+      R: R0,
+      limits: { minPolar: 0.35, maxPolar: 1.56, minAz: -1.6, maxAz: 1.6 },
+      get overviewPose() {
+        return ovPose();
+      },
+      focusPose: (id) => stallPose(id),
+      islandPose: (i) => (blocks[i] ? blockPose(i) : null),
+      setFocus(id) {
+        focusId = id && items[id] ? id : null;
+        if (!focusId) return;
+        const it = items[focusId];
+        beam.position.set(it.x, 0.05, it.z + 0.3);
+        ring.position.set(it.x, 0.1, it.z + 0.3);
+      },
+      setTheme,
+      blocks,
+      items,
+      update(t, dt, cam) {
+        const tour = TT(),
+          S = tour && tour.S,
+          ctl = tour && tour.controls;
+        // 進到某個攤位時：拉近並轉到平視
+        const ent = S && S.mode === "tour" && S.cur ? S.cur.entity : null;
+        if (ent !== lastEnt) {
+          if (ent && items[ent] && ctl && !reduce) startWalk(ent, cam, ctl);
+          else if (!ent) path = null;
+          lastEnt = ent;
+        }
+        if (S && S.mode !== "tour" && lastMode === "tour") path = null;
+        lastMode = S ? S.mode : "overview";
+        if (path) {
+          const p = Math.min(1, (performance.now() - path.t0) / path.ms),
+            e2 = ease(p),
+            ey = e2 * e2;
+          cam.position.set(
+            path.P0.x + (path.P1.x - path.P0.x) * e2,
+            path.P0.y + (path.P1.y - path.P0.y) * ey,
+            path.P0.z + (path.P1.z - path.P0.z) * e2,
+          );
+          ctl.target.lerpVectors(path.T0, path.T1, e2);
+          cam.lookAt(ctl.target);
+          if (p >= 1) path = null;
+        }
+        // 光柱
+        fk += ((focusId ? 1 : 0) - fk) * Math.min(1, dt * (focusId ? 2.4 : 3));
+        beamMat.uniforms.uTime.value = t;
+        // 平視時光柱會擋住攤面：鏡頭靠近就淡出，只留地上的光圈
+        beamMat.uniforms.uK.value = fk * clamp((cam.position.distanceTo(beam.position) - 6) / 6);
+        beam.visible = ring.visible = fk > 0.004;
+        ringMat.opacity = fk * (0.6 + 0.25 * Math.sin(t * 3));
+        // 點選：在某區時只開該區的攤位，全景時都能點
+        const fl = S && (S.mode === "island" || S.mode === "tour") ? S.isl : -1;
+        for (const id in items) {
+          const it = items[id];
+          fl < 0 || it.block === fl ? it.hit.layers.set(0) : it.hit.layers.set(31);
+        }
+        layoutTags(cam, !!S && S.mode === "overview" && !path);
+        crowd.draw(t, dt, cam);
+        drawBirds(t);
+        drawCats(t, dt);
+      },
+    };
+    // 拖曳鏡頭時停止動線
+    setTimeout(() => {
+      const c = TT() && TT().controls;
+      c && c.addEventListener("start", () => (path = null));
+    }, 0);
+    return W;
+  },
+};
+
+/* 版型代號：英文代號或中文名稱都可以；不認得的一律用六角群島 */
+Hc["小島"] = Hc["六角群島"] = Hc.islands;
+Hc["大樓"] = Hc["科技大樓"] = Hc.tower;
+Hc["市集"] = Hc.market;
+Hc.islands.name = "小島";
+var tplKey = String(Ge.site.template || "").trim(),
+  tplName = (Hc[tplKey] || Hc.town) === Hc.tower ? "tower" : (Hc[tplKey] || Hc.town) === Hc.market ? "market" : "islands";
+document.body.classList.add("tpl-" + tplName);
+var dM = Hc[tplKey] || Hc.town,
   as = new Gs({ antialias: !0, alpha: !0 });
 as.setPixelRatio(Math.min(devicePixelRatio, 2));
 Dt("#stage").appendChild(as.domElement);
@@ -4995,7 +7539,7 @@ Ge.entities.forEach((s) => {
   (Ke.anchors[s.id].add(e), (mm[s.id] = t));
 });
 Ge.categories.forEach((c, i) => {
-  if (!crowdCat[c.id] || !Ke.isl || !Ke.isl[i]) return;
+  if (!crowdCat[c.id] || !Ke.isl || !Ke.isl[i] || Ke.noCatLabels) return;
   let t = document.createElement("div");
   ((t.className = "lb catlb"), (t.innerHTML = `<i style="background:${he(Xc(c.id))}"></i>${he(c.name)}`), (t.onclick = () => focusIsland(i)));
   let o = new Bc.Object3D();
@@ -5046,12 +7590,6 @@ as.domElement.addEventListener("pointerdown", (s) => {
 as.domElement.addEventListener("pointerup", (s) => {
   if (!Gc || Math.hypot(s.clientX - Gc[0], s.clientY - Gc[1]) > 5) return;
   (Ju.set((s.clientX / innerWidth) * 2 - 1, -(s.clientY / innerHeight) * 2 + 1),
-    Ae.view &&
-      Ae.view.enabled &&
-      Ju.set(
-        ((s.clientX + Ae.view.offsetX) / Ae.view.fullWidth) * 2 - 1,
-        -((s.clientY + Ae.view.offsetY) / Ae.view.fullHeight) * 2 + 1,
-      ),
     lm.setFromCamera(Ju, Ae));
   let t = lm.intersectObjects(Ke.pickables, !1)[0];
   if (t) return (emit("pick"), Kc(t.object.userData.eid));
@@ -5412,6 +7950,33 @@ Dt("#ttl").textContent = Ge.site.title || "";
 Dt("#sub").textContent = Ge.site.subtitle || "";
 Dt("#tag").textContent = Ge.site.tagline || "";
 Dt("#lead").textContent = Ge.site.intro || "";
+/* 關於本站：導言最後的 info 圖示 */
+(function () {
+  var HELPER_URL = "https://alifina-lin.github.io/tour-site-builder-3d/";
+  var b = document.createElement("button");
+  b.type = "button";
+  b.className = "aboutb";
+  b.title = "關於本站";
+  b.setAttribute("aria-label", "關於本站");
+  b.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.2"/></svg>';
+  Dt("#lead").appendChild(b);
+  var ov = document.createElement("div");
+  ov.className = "ov";
+  ov.id = "aboutov";
+  ov.innerHTML = '<div class="glass" id="aboutcard" role="dialog" aria-modal="true" aria-labelledby="about-h"><button class="x" id="about-x" aria-label="關閉">×</button><h2 class="serif" id="about-h">關於本站</h2><p id="about-p"></p><p class="aboutl"><a id="about-a" target="_blank" rel="noopener"></a></p></div>';
+  document.body.appendChild(ov);
+  var t = document.createElement("b");
+  t.textContent = Ge.site.title || "這裡";
+  ov.querySelector("#about-p").append("本站使用「NCCU 3D導覽網站小幫手」創建，帶大家走進", t, "的小世界。");
+  var a = ov.querySelector("#about-a");
+  a.href = HELPER_URL;
+  a.textContent = "NCCU 3D導覽網站小幫手";
+  var close = function () { ov.classList.remove("on"); };
+  b.onclick = function (e) { e.stopPropagation(); ov.classList.add("on"); ov.querySelector("#about-x").focus(); };
+  ov.querySelector("#about-x").onclick = close;
+  ov.addEventListener("click", function (e) { e.target === ov && close(); });
+  addEventListener("keydown", function (e) { e.key === "Escape" && close(); });
+})();
 var _M = [...new Set(Mn.map((s) => s.cat))];
 Dt("#chips").innerHTML =
   _M
@@ -5463,15 +8028,13 @@ as.domElement.addEventListener("pointermove", (s) => {
   if (s.buttons || n - hvT < 90) return;
   hvT = n;
   Ju.set((s.clientX / innerWidth) * 2 - 1, -(s.clientY / innerHeight) * 2 + 1);
-  Ae.view &&
-    Ae.view.enabled &&
-    Ju.set(((s.clientX + Ae.view.offsetX) / Ae.view.fullWidth) * 2 - 1, -((s.clientY + Ae.view.offsetY) / Ae.view.fullHeight) * 2 + 1);
   lm.setFromCamera(Ju, Ae);
   as.domElement.style.cursor =
     lm.intersectObjects(Ke.pickables, !1).length || lm.intersectObjects(Ke.islandPicks || [], !1).length ? "pointer" : "";
 });
 window.__tourPerf = { mkInstancer, mergeGeos };
 window.__tour = {
+  tpl: tplName,
   S: kt,
   camera: Ae,
   controls: He,
@@ -5505,6 +8068,12 @@ three/build/three.module.js:
    *)
 */
 </script>
+<style id="about-css">
+.aboutb{display:inline-grid;place-items:center;width:22px;height:22px;margin-left:6px;vertical-align:-5px;border:0;padding:0;border-radius:50%;background:rgba(37,49,59,.08);color:var(--ink);cursor:pointer}.aboutb:hover{background:rgba(37,49,59,.16)}.aboutb svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+body.night .aboutb{background:rgba(160,200,235,.14)}
+#aboutcard{width:min(440px,calc(100vw - 28px));padding:24px 26px 20px}#aboutcard h2{margin:0 0 10px;font-size:22px;letter-spacing:.04em;font-weight:900}#aboutcard p{margin:0 0 10px}#aboutcard .aboutl a{color:var(--accent);font-weight:700}
+#aboutcard .x{float:right;border:0;background:rgba(37,49,59,.08);width:30px;height:30px;border-radius:9px;cursor:pointer;font-size:16px;color:var(--ink)}
+</style>
 <style id="theme-css">
 /* ===== 日夜主題＋新增介面 ===== */
 :root{--ink:#21313d;--muted:#5d707e;--faint:#93a3ae;--glass:rgba(255,255,255,.84);--tl:rgba(255,255,255,.74);--sh:0 10px 28px rgba(20,70,100,.14);--lb:rgba(255,255,255,.9);--lboff:rgba(255,255,255,.42);--lbofft:#5f7484;--gsh:0 18px 40px rgba(20,70,100,.18)}
@@ -5555,8 +8124,9 @@ body.night #stage::before{opacity:0}body.night #stage::after{opacity:1}
 #cs .card.flat,#cs .card.flip.flat{transform:none}#cs .card.flat .f{display:none}#cs .card.flat .b{transform:none}
 </style>
 <script type="module" id="theme-decor">
-/* ==== 日夜主題裝飾層：海面、雲、鳥、帆船、天燈、光線、霧；依電腦時間自動切換，也可手動切換 ==== */
+/* ==== 日夜主題裝飾層：海面、雲、鳥、帆船、天燈、光線、霧；依電腦時間自動切換，也可手動切換（六角群島專用）==== */
 (() => {
+  if (!document.body.classList.contains("tpl-islands")) return;
   const THEMES = {"day": {"seed": 21, "light": {"sky": "#f2f8ff", "ground": "#d9cfb4", "hemi": 1.0, "sun": "#fff4e0", "sunI": 1.25, "sunPos": [14, 24, 10]}, "fog": {"color": "#d6ebf1", "near": 1.6, "far": 5.5}, "sea": {"deep": "#4a94bf", "mid": "#5cb3c6", "shallow": "#a6e2d5", "foam": "#ffffff", "horizon": "#d6ebf1", "glint": "#ffffff", "cloudShadow": 0.16, "glitter": 0.45, "spark": 0.3, "wave": 0.016, "normK": 1.1, "glintElev": 0.5, "shallowWidth": 7, "specPow": 90, "path": 10}, "cloud": {"count": 18, "size": [1.5, 3.0], "h": [6, 12], "spread": 40, "wind": [1, 0.35], "speed": 0.45, "top": "#ffffff", "bottom": "#d7e4f0", "emissive": "#ffffff", "emissiveI": 0.3, "opacity": 0.96, "occluded": 0, "margin": 1.2, "maxAng": 0.3}, "bird": {"flocks": 2, "perFlock": 6, "h": [11, 16], "scale": 1.25, "body": "#ffffff", "tip": "#5d6b78"}, "boats": {"count": 3, "scale": 1.3, "hull": ["#c8643b", "#3f86a8", "#ffffff"], "sail": "#fffaf0"}, "lanterns": null, "fx": {"boost": 1.1, "dust": 1.25}}, "night": {"seed": 33, "light": {"sky": "#ffd6b8", "ground": "#6c6a98", "hemi": 0.95, "sun": "#ffb877", "sunI": 1.45, "sunPos": [18, 12, 10]}, "fog": {"color": "#f1b49c", "near": 1.3, "far": 4.8}, "sea": {"deep": "#3f5283", "mid": "#4f7b97", "shallow": "#8bb8ad", "foam": "#fff1df", "horizon": "#f0b39c", "glint": "#ffc778", "cloudShadow": 0.0, "glitter": 1.0, "spark": 0.4, "wave": 0.018, "normK": 1.5, "glintElev": 0.38, "shallowWidth": 6.5, "specPow": 90, "path": 22}, "cloud": {"count": 16, "size": [1.6, 3.2], "h": [6, 12], "spread": 40, "wind": [1, -0.25], "speed": 0.35, "top": "#ffece6", "bottom": "#cbb4d8", "emissive": "#ffcab6", "emissiveI": 0.35, "opacity": 0.95, "occluded": 0, "margin": 1.2, "maxAng": 0.3}, "bird": {"flocks": 2, "perFlock": 6, "h": [11, 17], "scale": 1.2, "body": "#3a3348", "tip": "#2a2436"}, "boats": null, "lanterns": {"count": 12, "y0": 1.5, "top": 19, "scale": 1.35, "paper": "#ffe3b0", "glow": "#ffa85a", "glowSize": 2.2}, "fx": {"boost": 1.25, "dust": 1.05}}};
   const T = window.__tour;
   if (!T || !T.W || !T.THREE || !T.camera) return;
@@ -6022,9 +8592,213 @@ body.night #stage::before{opacity:0}body.night #stage::after{opacity:1}
   };
 })();
 </script>
-<script type="module" id="sound">
-/* ==== 即時合成音效（Web Audio）：按鈕、光柱、翻卡、故事飛入；全景時淡淡的水聲、風聲、鳥鳴（夜晚換成蟲鳴）==== */
+<style id="tower-css">
+/* ===== 科技大樓專用樣式（只套用在 body.tpl-tower）===== */
+body.tpl-tower .serif{font-family:"Noto Sans TC","Noto Sans CJK TC","PingFang TC","Microsoft JhengHei",sans-serif;letter-spacing:.04em}
+body.tpl-tower{--ink:#10283c;--muted:#52697c;--faint:#8aa0b1;--line:rgba(16,40,60,.1);--glass:rgba(255,255,255,.82);--tl:rgba(255,255,255,.74);--sh:0 10px 28px rgba(10,40,70,.16);--lb:rgba(255,255,255,.93);--lboff:rgba(255,255,255,.42);--lbofft:#58708a;--gsh:0 18px 40px rgba(10,40,70,.2)}
+body.tpl-tower{background:#dcedf8}
+body.tpl-tower #sky .d{background:linear-gradient(180deg,#8ec6ea 0%,#b9dcf2 38%,#dcedf8 70%,#eef6fb 100%)}
+body.tpl-tower #sky .n{background:linear-gradient(180deg,#040814 0%,#0a1630 42%,#16294d 78%,#1c3560 100%)}
+body.tpl-tower #stage::before{background:radial-gradient(130% 100% at 50% 45%,transparent 70%,rgba(40,100,150,.08) 100%)}
+body.tpl-tower #stage::after{background:radial-gradient(70% 45% at 50% 105%,rgba(40,160,255,.16),transparent 70%),radial-gradient(130% 100% at 50% 40%,transparent 55%,rgba(0,5,20,.5) 100%)}
+body.tpl-tower.night{--ink:#e4f2ff;--muted:#9db4c8;--faint:#6f869b;--line:rgba(160,200,235,.14);--glass:rgba(10,20,36,.8);--tl:rgba(10,20,36,.72);--sh:0 10px 28px rgba(0,0,0,.4);--lb:rgba(12,24,42,.9);--lboff:rgba(12,24,42,.5);--lbofft:#7f97ad;--gsh:0 18px 40px rgba(0,0,0,.5)}
+body.tpl-tower.night .btn,body.tpl-tower.night .ib.pri,body.tpl-tower.night .chip.cur,body.tpl-tower.night .lb.on,body.tpl-tower.night #cs .f{color:#06121f}
+body.tpl-tower.night .chip{background:var(--lb);color:var(--ink)}
+body.tpl-tower.night .chip.cur{background:var(--ink);color:#06121f}
+body.tpl-tower.night .chip.ghost{background:transparent;color:var(--muted)}
+body.tpl-tower.night .btn.sec,body.tpl-tower.night .ib,body.tpl-tower.night .tgb,body.tpl-tower.night .tags a,body.tpl-tower.night .tags span,body.tpl-tower.night .it,body.tpl-tower.night #card .x,body.tpl-tower.night #end .x{background:rgba(160,200,235,.12);color:var(--ink)}
+body.tpl-tower.night .btn.sec:hover,body.tpl-tower.night .tgb:hover,body.tpl-tower.night .it:hover{background:rgba(160,200,235,.2)}
+body.tpl-tower.night .ib.pri{background:var(--ink)}
+body.tpl-tower.night #d-b .story{background:rgba(80,200,255,.1)}
+body.tpl-tower.night .lb{box-shadow:0 4px 14px rgba(0,0,0,.4)}
+body.tpl-tower.night #dots button{background:var(--faint)}
+body.tpl-tower.night #dots button.cur{background:var(--accent)}
+body.tpl-tower .glass{border:1px solid rgba(255,255,255,.55)}
+body.tpl-tower.night .glass{border:1px solid rgba(120,190,255,.18)}
+body.tpl-tower #tl{border:1px solid rgba(255,255,255,.55)}
+body.tpl-tower.night #tl{border:1px solid rgba(120,190,255,.18)}
+body.tpl-tower .lb.dy{pointer-events:none;background:var(--lb);color:var(--ink);font-size:12px;font-weight:700;letter-spacing:.06em;padding:7px 11px;border-left:3px solid var(--accent);border-radius:6px;box-shadow:0 4px 14px rgba(10,40,70,.18);text-shadow:none;transform:none}
+body.tpl-tower.night .lb.dy{color:var(--ink);box-shadow:0 0 12px rgba(60,170,255,.25)}
+body.tpl-tower[data-mode="overview"] .lb:not(.dy){opacity:0;pointer-events:none}
+body.tpl-tower[data-mode="island"] .lb.off:not(.dy),body.tpl-tower[data-mode="tour"] .lb.off:not(.dy){opacity:0;pointer-events:none}
+body.tpl-tower .lb{transition:opacity .35s,background-color .35s,color .35s}
+@media(max-width:760px){body.tpl-tower .lb.dy{font-size:11px;padding:5px 8px;max-width:104px;overflow:hidden;text-overflow:ellipsis}
+body.tpl-tower .lb.dy.roof{max-width:none}
+}
+body.tpl-tower #ftags{position:fixed;inset:0;pointer-events:none;z-index:3;transition:opacity .45s}
+body.tpl-tower #ftags.off{opacity:0}
+body.tpl-tower #ftags.off .ftag{pointer-events:none}
+body.tpl-tower #ftags svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+body.tpl-tower #ftags path{fill:none;stroke:var(--ink);stroke-opacity:.5;stroke-width:1.2}
+body.tpl-tower #ftags circle{stroke:#fff;stroke-width:1.5}
+body.tpl-tower.night #ftags circle{stroke:#0b1626}
+body.tpl-tower .ftag{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.6);font:inherit;cursor:pointer;padding:4px 12px 4px 4px;border-radius:9px;background:var(--lb);color:var(--ink);box-shadow:var(--sh);white-space:nowrap;transform:translateY(-50%);transition:transform .2s,background-color .3s}
+body.tpl-tower.night .ftag{border-color:rgba(120,190,255,.2)}
+body.tpl-tower .ftag b{display:grid;place-items:center;min-width:30px;height:24px;padding:0 4px;border-radius:6px;font-size:12px;color:#fff;background:var(--fc)}
+body.tpl-tower .ftag span{font-size:13px;font-weight:700;letter-spacing:.04em}
+body.tpl-tower .ftag:hover{transform:translate(4px,-50%)}
+@media(max-width:760px){body.tpl-tower .ftag{padding:2px 8px 2px 2px;gap:5px}
+body.tpl-tower .ftag b{min-width:24px;height:20px;font-size:11px}
+body.tpl-tower .ftag span{font-size:11.5px}
+}
+body.tpl-tower .chip i,body.tpl-tower .it i,body.tpl-tower .lb i{filter:saturate(.35) brightness(1.05)}
+body.tpl-tower .ftag b{color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.15)}
+
+</style>
+<style id="market-css">
+/* ===== 市集專用樣式（只套用在 body.tpl-market）===== */
+body.tpl-market .serif{font-family:"Noto Sans TC","Noto Sans CJK TC","PingFang TC","Microsoft JhengHei",sans-serif;letter-spacing:.04em}
+body.tpl-market{--ink:#10283c;--muted:#52697c;--faint:#8aa0b1;--line:rgba(16,40,60,.1);--glass:rgba(255,255,255,.82);--tl:rgba(255,255,255,.74);--sh:0 10px 28px rgba(10,40,70,.16);--lb:rgba(255,255,255,.93);--lboff:rgba(255,255,255,.42);--lbofft:#58708a;--gsh:0 18px 40px rgba(10,40,70,.2)}
+body.tpl-market{background:#dcedf8}
+body.tpl-market #sky .d{background:linear-gradient(180deg,#8ec6ea 0%,#b9dcf2 38%,#dcedf8 70%,#eef6fb 100%)}
+body.tpl-market #sky .n{background:linear-gradient(180deg,#040814 0%,#0a1630 42%,#16294d 78%,#1c3560 100%)}
+body.tpl-market #stage::before{background:radial-gradient(130% 100% at 50% 45%,transparent 70%,rgba(40,100,150,.08) 100%)}
+body.tpl-market #stage::after{background:radial-gradient(70% 45% at 50% 105%,rgba(40,160,255,.16),transparent 70%),radial-gradient(130% 100% at 50% 40%,transparent 55%,rgba(0,5,20,.5) 100%)}
+body.tpl-market.night{--ink:#e4f2ff;--muted:#9db4c8;--faint:#6f869b;--line:rgba(160,200,235,.14);--glass:rgba(10,20,36,.8);--tl:rgba(10,20,36,.72);--sh:0 10px 28px rgba(0,0,0,.4);--lb:rgba(12,24,42,.9);--lboff:rgba(12,24,42,.5);--lbofft:#7f97ad;--gsh:0 18px 40px rgba(0,0,0,.5)}
+body.tpl-market.night .btn,body.tpl-market.night .ib.pri,body.tpl-market.night .chip.cur,body.tpl-market.night .lb.on,body.tpl-market.night #cs .f{color:#06121f}
+body.tpl-market.night .chip{background:var(--lb);color:var(--ink)}
+body.tpl-market.night .chip.cur{background:var(--ink);color:#06121f}
+body.tpl-market.night .chip.ghost{background:transparent;color:var(--muted)}
+body.tpl-market.night .btn.sec,body.tpl-market.night .ib,body.tpl-market.night .tgb,body.tpl-market.night .tags a,body.tpl-market.night .tags span,body.tpl-market.night .it,body.tpl-market.night #card .x,body.tpl-market.night #end .x{background:rgba(160,200,235,.12);color:var(--ink)}
+body.tpl-market.night .btn.sec:hover,body.tpl-market.night .tgb:hover,body.tpl-market.night .it:hover{background:rgba(160,200,235,.2)}
+body.tpl-market.night .ib.pri{background:var(--ink)}
+body.tpl-market.night #d-b .story{background:rgba(80,200,255,.1)}
+body.tpl-market.night .lb{box-shadow:0 4px 14px rgba(0,0,0,.4)}
+body.tpl-market.night #dots button{background:var(--faint)}
+body.tpl-market.night #dots button.cur{background:var(--accent)}
+body.tpl-market .glass{border:1px solid rgba(255,255,255,.55)}
+body.tpl-market.night .glass{border:1px solid rgba(120,190,255,.18)}
+body.tpl-market #tl{border:1px solid rgba(255,255,255,.55)}
+body.tpl-market.night #tl{border:1px solid rgba(120,190,255,.18)}
+body.tpl-market .lb.dy{pointer-events:none;background:var(--lb);color:var(--ink);font-size:12px;font-weight:700;letter-spacing:.06em;padding:7px 11px;border-left:3px solid var(--accent);border-radius:6px;box-shadow:0 4px 14px rgba(10,40,70,.18);text-shadow:none;transform:none}
+body.tpl-market.night .lb.dy{color:var(--ink);box-shadow:0 0 12px rgba(60,170,255,.25)}
+body.tpl-market[data-mode="overview"] .lb:not(.dy){opacity:0;pointer-events:none}
+body.tpl-market[data-mode="island"] .lb.off:not(.dy),body.tpl-market[data-mode="tour"] .lb.off:not(.dy){opacity:0;pointer-events:none}
+body.tpl-market .lb{transition:opacity .35s,background-color .35s,color .35s}
+@media(max-width:760px){body.tpl-market .lb.dy{font-size:11px;padding:5px 8px;max-width:104px;overflow:hidden;text-overflow:ellipsis}
+body.tpl-market .lb.dy.roof{max-width:none}
+}
+body.tpl-market #ftags{position:fixed;inset:0;pointer-events:none;z-index:3;transition:opacity .45s}
+body.tpl-market #ftags.off{opacity:0}
+body.tpl-market #ftags.off .ftag{pointer-events:none}
+body.tpl-market #ftags svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+body.tpl-market #ftags path{fill:none;stroke:var(--ink);stroke-opacity:.5;stroke-width:1.2}
+body.tpl-market #ftags circle{stroke:#fff;stroke-width:1.5}
+body.tpl-market.night #ftags circle{stroke:#0b1626}
+body.tpl-market .ftag{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.6);font:inherit;cursor:pointer;padding:4px 12px 4px 4px;border-radius:9px;background:var(--lb);color:var(--ink);box-shadow:var(--sh);white-space:nowrap;transform:translateY(-50%);transition:transform .2s,background-color .3s}
+body.tpl-market.night .ftag{border-color:rgba(120,190,255,.2)}
+body.tpl-market .ftag b{display:grid;place-items:center;min-width:30px;height:24px;padding:0 4px;border-radius:6px;font-size:12px;color:#fff;background:var(--fc)}
+body.tpl-market .ftag span{font-size:13px;font-weight:700;letter-spacing:.04em}
+body.tpl-market .ftag:hover{transform:translate(4px,-50%)}
+@media(max-width:760px){body.tpl-market .ftag{padding:2px 8px 2px 2px;gap:5px}
+body.tpl-market .ftag b{min-width:24px;height:20px;font-size:11px}
+body.tpl-market .ftag span{font-size:11.5px}
+}
+body.tpl-market .chip i,body.tpl-market .it i,body.tpl-market .lb i{filter:saturate(.35) brightness(1.05)}
+body.tpl-market .ftag b{color:#fff;text-shadow:0 1px 1px rgba(0,0,0,.15)}
+body.tpl-market #sky .d{background:linear-gradient(180deg,#9fcbe8 0%,#c9e1ef 42%,#efe7d8 100%)}
+body.tpl-market #sky .n{background:linear-gradient(180deg,#060a16 0%,#141a30 45%,#2b2436 80%,#3a2c30 100%)}
+body.tpl-market{background:#efe7d8}
+body.tpl-market #mtags{position:fixed;inset:0;pointer-events:none;z-index:3;transition:opacity .4s}
+body.tpl-market #mtags.off{opacity:0}
+body.tpl-market #mtags.off .mtag{pointer-events:none}
+body.tpl-market .mtag{position:absolute;left:0;top:0;transform:translate(-50%,calc(-100% - 14px));pointer-events:auto;display:flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.75);font:inherit;cursor:pointer;padding:5px 13px 5px 10px;border-radius:999px;background:var(--lb);color:var(--ink);box-shadow:var(--sh);white-space:nowrap;font-weight:700;font-size:13px;letter-spacing:.04em;transition:transform .2s,background-color .3s}
+body.tpl-market .mtag i{width:10px;height:10px;border-radius:50%;background:var(--fc);flex:none}
+body.tpl-market .mtag::after{content:"";position:absolute;left:50%;top:100%;width:1.5px;height:14px;background:var(--ink);opacity:.45}
+body.tpl-market .mtag:hover{transform:translate(-50%,calc(-100% - 18px))}
+@media(max-width:760px){body.tpl-market .mtag{font-size:11.5px;padding:3px 9px 3px 7px}
+}
+</style>
+<script type="module" id="tower-theme">
+/* ==== 科技大樓、市集共用：日夜切換（依電腦時間自動；可手動）、操作範圍、介面配色 ==== */
 (() => {
+  if (!document.body.classList.contains("tpl-tower") && !document.body.classList.contains("tpl-market")) return;
+  const T = window.__tour;
+  if (!T || !T.W || !T.W.setTheme) return;
+  const W = T.W, ctl = T.controls, THREE = T.THREE;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* 操作範圍：只左右轉、仰角小幅度，上下撥動留給切換樓層 */
+  const LIM = Object.assign({ minPolar: 0.3, maxPolar: 1.5, minAz: -1.4, maxAz: 1.4 }, W.limits || {});
+  ctl.enablePan = false;
+  ctl.minPolarAngle = LIM.minPolar;
+  ctl.maxPolarAngle = LIM.maxPolar;
+  ctl.minAzimuthAngle = LIM.minAz;
+  ctl.maxAzimuthAngle = LIM.maxAz;
+  ctl.autoRotate = false;
+
+  /* 柔和陰影 */
+  if (T.renderer) {
+    T.renderer.shadowMap.enabled = true;
+    T.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    T.scene.traverse((o) => o.material && [].concat(o.material).forEach((m) => (m.needsUpdate = true)));
+  }
+
+  /* 介面主色：取使用者品牌色的色相，換成俐落的科技藍綠調 */
+  const root = document.documentElement;
+  const brand = (getComputedStyle(root).getPropertyValue("--accent") || "#1aa6c8").trim();
+  const hsl = {};
+  new THREE.Color(brand).getHSL(hsl);
+  const accent = (night) => `hsl(${Math.round(hsl.h * 360)} ${night ? 88 : 78}% ${night ? 60 : 42}%)`;
+
+  /* 屋頂上的網站標題不縮短 */
+  const siteTitle = (document.getElementById("ttl") || {}).textContent;
+  document.querySelectorAll(".lb.dy").forEach((el) => { if (el.textContent === siteTitle) el.classList.add("roof"); });
+
+  /* 目前是第幾層、什麼模式 → 給 CSS 用，全景時只顯示樓層牌 */
+  document.body.dataset.mode = "overview";
+  addEventListener("tour", (e) => {
+    if (e.detail && e.detail.type === "mode") document.body.dataset.mode = e.detail.mode;
+  });
+
+  /* ---------- 日夜 ---------- */
+  let mix = 0, target = 0, cur = "day", last = performance.now();
+  const autoName = () => { const h = new Date().getHours(); return h >= 6 && h < 18 ? "day" : "night"; };
+  const btn = document.getElementById("themeb");
+  const icon = {
+    day: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>',
+    night: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
+  };
+  const setTheme = (name, instant) => {
+    cur = name;
+    target = name === "night" ? 1 : 0;
+    if (instant || reduce) { mix = target; W.setTheme(mix); }
+    document.body.classList.toggle("night", name === "night");
+    root.style.setProperty("--accent", accent(name === "night"));
+    if (btn) {
+      btn.innerHTML = icon[name];
+      btn.title = name === "night" ? "夜晚（點一下切換成白天）" : "白天（點一下切換成夜晚）";
+      btn.setAttribute("aria-label", btn.title);
+    }
+    window.dispatchEvent(new CustomEvent("tour", { detail: { type: "theme", night: name === "night", instant: !!instant } }));
+  };
+  let manual = false;
+  const q = new URLSearchParams(location.search).get("theme");
+  if (q === "day" || q === "night") { manual = true; setTheme(q, true); } else setTheme(autoName(), true);
+  setInterval(() => { if (!manual && autoName() !== cur) setTheme(autoName(), false); }, 60000);
+  if (btn) btn.onclick = () => { manual = true; setTheme(cur === "day" ? "night" : "day", false); };
+  window.__theme = {
+    set: (n) => { manual = true; setTheme(n, false); },
+    get: () => cur,
+    auto: () => { manual = false; setTheme(autoName(), false); },
+  };
+  (function tick(now) {
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    if (Math.abs(target - mix) > 0.001) {
+      mix += (target - mix) * Math.min(1, dt * 2.2);
+      if (Math.abs(target - mix) < 0.002) mix = target;
+      W.setTheme(mix);
+    }
+    requestAnimationFrame(tick);
+  })(performance.now());
+})();
+</script>
+<script type="module" id="sound">
+/* ==== 即時合成音效（Web Audio）：按鈕、光柱、翻卡、故事飛入；全景時淡淡的水聲、風聲、鳥鳴（夜晚換成蟲鳴）；科技大樓是車行聲加零星人聲、市集是人群嘈雜聲加鳥鳴 ==== */
+(() => {
+  const TOWER = document.body.classList.contains("tpl-tower"),
+    MARKET = document.body.classList.contains("tpl-market");
   const AC = window.AudioContext || window.webkitAudioContext;
   const btn = document.getElementById("sndb");
   if (!AC) { btn && (btn.style.display = "none"); return; }
@@ -6136,22 +8910,24 @@ body.night #stage::before{opacity:0}body.night #stage::after{opacity:1}
   const loop = (buf) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.start(0, Math.random() * 3); return s; };
   const buildAmbience = () => {
     // 水聲：低頻噪音＋慢速浪潮起伏
-    const w = loop(brown), wl = ctx.createBiquadFilter(); wl.type = "lowpass"; wl.frequency.value = 480;
-    const wg = ctx.createGain(); lfo(0.085, 0.28, wg.gain, 0.55);
+    const w = loop(brown), wl = ctx.createBiquadFilter(); wl.type = "lowpass"; wl.frequency.value = TOWER ? 170 : MARKET ? 600 : 480;
+    const wg = ctx.createGain(); lfo(TOWER ? 0.05 : MARKET ? 0.13 : 0.085, TOWER ? 0.02 : MARKET ? 0.03 : 0.28, wg.gain, TOWER ? 0.12 : MARKET ? 0.1 : 0.55);
     const wv = ctx.createGain(); wv.gain.value = 0;
     w.connect(wl); wl.connect(wg); wg.connect(wv); wv.connect(amb);
     // 浪花細沙聲
     const s = loop(white), sb = ctx.createBiquadFilter(); sb.type = "bandpass"; sb.frequency.value = 1300; sb.Q.value = 0.6;
-    const sg = ctx.createGain(); lfo(0.07, 0.025, sg.gain, 0.03);
+    const sg = ctx.createGain(); lfo(0.07, TOWER || MARKET ? 0.004 : 0.025, sg.gain, TOWER || MARKET ? 0.008 : 0.03);
     s.connect(sb); sb.connect(sg); sg.connect(wv);
     // 風聲：帶通噪音，頻率與音量緩慢飄移
     const f = loop(white), fb = ctx.createBiquadFilter(); fb.type = "bandpass"; fb.Q.value = 0.8;
-    lfo(0.045, 260, fb.frequency, 560);
+    lfo(0.045, TOWER ? 160 : 260, fb.frequency, TOWER ? 900 : 560);
     const fg = ctx.createGain(); lfo(0.031, 0.05, fg.gain, 0.07);
     const fv = ctx.createGain(); fv.gain.value = 0;
     f.connect(fb); fb.connect(fg); fg.connect(fv); fv.connect(amb);
     layers = { water: wv, wind: fv };
-    birdLoop(); cricketLoop();
+    if (!TOWER) { birdLoop(); cricketLoop(); }
+    if (TOWER || MARKET) crowdLoop();
+    if (TOWER) carLoop();
   };
   const ambTarget = () => (!on ? 0 : mode === "overview" ? 0.2 : mode === "island" ? 0.1 : 0);
   const setAmb = (instant) => {
@@ -6199,6 +8975,54 @@ body.night #stage::before{opacity:0}body.night #stage::after{opacity:1}
       }
     }
     setTimeout(cricketLoop, 700 + Math.random() * 900);
+  };
+
+  /* ---------- 人聲（市集：熱鬧嘈雜；科技大樓：零星）與車聲（科技大樓）---------- */
+  const babble = (t0, pan, v) => {
+    // 一小段帶通噪音 ≈ 一個音節；很多段疊在一起就是遠遠的人聲
+    const d = 0.07 + Math.random() * 0.2, src = ctx.createBufferSource();
+    src.buffer = white;
+    const f1 = ctx.createBiquadFilter(); f1.type = "bandpass"; f1.Q.value = 6;
+    f1.frequency.setValueAtTime(320 + Math.random() * 520, t0);
+    f1.frequency.linearRampToValueAtTime(280 + Math.random() * 700, t0 + d);
+    const f2 = ctx.createBiquadFilter(); f2.type = "bandpass"; f2.Q.value = 7; f2.frequency.value = 1000 + Math.random() * 1100;
+    const g = envG(t0, 0.02, v, d), g2 = ctx.createGain(); g2.gain.value = 0.45;
+    src.connect(f1); f1.connect(g); src.connect(f2); f2.connect(g2); g2.connect(g);
+    out(g, pan, 0.3, amb);
+    src.start(t0, Math.random() * 3); src.stop(t0 + d + 0.12);
+  };
+  const crowdLoop = () => {
+    if (ambActive()) {
+      const n = MARKET ? 3 + Math.floor(Math.random() * 4) : 1 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < n; i++) babble(ctx.currentTime + 0.02 + Math.random() * 0.3, Math.random() * 1.6 - 0.8, (MARKET ? 0.6 : 0.3) * (0.5 + Math.random()) * (night ? 0.8 : 1));
+    }
+    setTimeout(crowdLoop, MARKET ? 110 + Math.random() * 130 : 380 + Math.random() * 700);
+  };
+  const carPass = (t0) => {
+    // 一台車由一側開到另一側：低頻噪音加引擎聲，濾波與音量先升後降，聲像左右移動
+    const dur = 2.4 + Math.random() * 1.8, dir = Math.random() < 0.5 ? -1 : 1, peak = 0.45 + Math.random() * 0.25;
+    const src = ctx.createBufferSource(); src.buffer = brown;
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass";
+    lp.frequency.setValueAtTime(240, t0); lp.frequency.linearRampToValueAtTime(950, t0 + dur * 0.5); lp.frequency.linearRampToValueAtTime(220, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(peak, t0 + dur * 0.5); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(lp); lp.connect(g);
+    const p = out(g, -0.85 * dir, 0.12, amb);
+    p.pan.setValueAtTime(-0.85 * dir, t0); p.pan.linearRampToValueAtTime(0.85 * dir, t0 + dur);
+    const o = ctx.createOscillator(); o.type = "sawtooth";
+    o.frequency.setValueAtTime(75 + Math.random() * 30, t0); o.frequency.linearRampToValueAtTime(58 + Math.random() * 15, t0 + dur);
+    const ol = ctx.createBiquadFilter(); ol.type = "lowpass"; ol.frequency.value = 170;
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t0); og.gain.exponentialRampToValueAtTime(peak * 0.25, t0 + dur * 0.5); og.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(ol); ol.connect(og); og.connect(p);
+    src.start(t0, Math.random() * 2); src.stop(t0 + dur + 0.1); o.start(t0); o.stop(t0 + dur + 0.1);
+  };
+  const carLoop = () => {
+    if (ambActive()) {
+      carPass(ctx.currentTime + 0.05);
+      Math.random() < 0.3 && carPass(ctx.currentTime + 0.8 + Math.random());
+    }
+    setTimeout(carLoop, (night ? 6000 : 3500) + Math.random() * 5000);
   };
 
   /* ---------- 事件串接 ---------- */
